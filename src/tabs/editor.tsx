@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
-import "../style.css"
+import "~style.css"
 
 import { AnnotatorScreen } from "../components/annotator/AnnotatorScreen"
 import { AudioRecorderScreen } from "../components/audio/AudioRecorderScreen"

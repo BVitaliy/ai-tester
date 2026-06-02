@@ -4,8 +4,13 @@
   "version": "1",
   "description": "Automated QA extension",
   "author": "REDSTONE | Demov Serhii",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
+    "predev": "node scripts/patch-plasmo-popup-template.mjs",
     "dev": "node scripts/dev.mjs",
+    "prebuild": "node scripts/patch-plasmo-popup-template.mjs",
     "build": "plasmo build",
     "package": "plasmo package",
     "agent": "node qa-agent/server.mjs"

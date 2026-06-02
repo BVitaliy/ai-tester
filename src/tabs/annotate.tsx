@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react"
 
-import "../style.css"
+import "~style.css"
 
 import { AnnotatorScreen } from "../components/annotator/AnnotatorScreen"
 import { getScreenshot } from "../lib/screenshotStorage"

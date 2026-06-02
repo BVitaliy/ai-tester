@@ -1,9 +1,24 @@
 import { execFile, spawn } from "node:child_process"
+import fs from "node:fs/promises"
 import http from "node:http"
+import os from "node:os"
+import path from "node:path"
 import { URL } from "node:url"
 
 const HOST = process.env.QA_AGENT_HOST ?? "127.0.0.1"
 const PORT = Number(process.env.QA_AGENT_PORT ?? 17321)
+const DEFAULT_ANDROID_HOME = path.join(os.homedir(), "Library", "Android", "sdk")
+const ANDROID_HOME = process.env.ANDROID_HOME || DEFAULT_ANDROID_HOME
+
+process.env.ANDROID_HOME = ANDROID_HOME
+process.env.PATH = [
+  path.join(ANDROID_HOME, "platform-tools"),
+  path.join(ANDROID_HOME, "emulator"),
+  process.env.PATH ?? ""
+].join(path.delimiter)
+
+const activeScreenRecordings = new Map()
+const activeActionRecordings = new Map()
 
 function json(res, status, body) {
   const payload = JSON.stringify(body)
@@ -53,6 +68,25 @@ function run(command, args, options = {}) {
       }
       resolve({ stdout, stderr })
     })
+  })
+}
+
+function runBuffer(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      command,
+      args,
+      { timeout: 20000, encoding: "buffer", maxBuffer: 50 * 1024 * 1024, ...options },
+      (error, stdout, stderr) => {
+        if (error) {
+          const wrapped = new Error(stderr?.toString()?.trim() || error.message)
+          wrapped.code = error.code
+          reject(wrapped)
+          return
+        }
+        resolve({ stdout, stderr })
+      }
+    )
   })
 }
 
@@ -122,6 +156,230 @@ async function listAvailableEmulators() {
 
 function adbArgs(deviceId, args) {
   return deviceId ? ["-s", deviceId, ...args] : args
+}
+
+function requireDeviceId(deviceId) {
+  if (!deviceId) throw new Error("deviceId is required")
+}
+
+function decodeXml(value = "") {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+}
+
+function parseBounds(bounds = "") {
+  const match = bounds.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/)
+  if (!match) return null
+  const [, x1, y1, x2, y2] = match.map(Number)
+  return {
+    x: x1,
+    y: y1,
+    width: Math.max(0, x2 - x1),
+    height: Math.max(0, y2 - y1),
+    centerX: Math.round((x1 + x2) / 2),
+    centerY: Math.round((y1 + y2) / 2),
+    raw: bounds
+  }
+}
+
+function parseUiElements(xml) {
+  const elements = []
+  const nodeRe = /<node\b([^>]*)\/>/g
+  let match
+
+  while ((match = nodeRe.exec(xml))) {
+    const attrs = {}
+    for (const attr of match[1].matchAll(/([\w-]+)="([^"]*)"/g)) {
+      attrs[attr[1]] = decodeXml(attr[2])
+    }
+
+    const text = attrs.text ?? ""
+    const contentDesc = attrs["content-desc"] ?? ""
+    const resourceId = attrs["resource-id"] ?? ""
+    const clickable = attrs.clickable === "true"
+    const enabled = attrs.enabled !== "false"
+    const focusable = attrs.focusable === "true"
+    const bounds = parseBounds(attrs.bounds)
+
+    if (!bounds) continue
+    if (!text && !contentDesc && !resourceId && !clickable && !focusable) continue
+
+    const id = `${elements.length + 1}`
+    const label = text || contentDesc || resourceId || attrs.class || `Element ${id}`
+
+    elements.push({
+      id,
+      text,
+      contentDesc,
+      resourceId,
+      className: attrs.class ?? "",
+      packageName: attrs.package ?? "",
+      clickable,
+      enabled,
+      focusable,
+      bounds,
+      label
+    })
+  }
+
+  return elements
+}
+
+async function getFocusedWindow(deviceId) {
+  try {
+    const { stdout } = await run("adb", adbArgs(deviceId, ["shell", "dumpsys", "window", "windows"]))
+    const line =
+      stdout
+        .split("\n")
+        .find((item) => item.includes("mCurrentFocus") || item.includes("mFocusedApp")) ?? ""
+    return line.trim()
+  } catch {
+    return ""
+  }
+}
+
+async function captureScreenshot(deviceId) {
+  requireDeviceId(deviceId)
+  const { stdout } = await runBuffer("adb", adbArgs(deviceId, ["exec-out", "screencap", "-p"]))
+  return `data:image/png;base64,${Buffer.from(stdout).toString("base64")}`
+}
+
+async function dumpUi(deviceId) {
+  requireDeviceId(deviceId)
+  const remotePath = `/sdcard/window-${Date.now()}.xml`
+  await run("adb", adbArgs(deviceId, ["shell", "uiautomator", "dump", remotePath]))
+  const { stdout } = await run("adb", adbArgs(deviceId, ["exec-out", "cat", remotePath]), {
+    maxBuffer: 10 * 1024 * 1024
+  })
+  await run("adb", adbArgs(deviceId, ["shell", "rm", "-f", remotePath])).catch(() => {})
+  return {
+    xml: stdout,
+    elements: parseUiElements(stdout),
+    focusedWindow: await getFocusedWindow(deviceId)
+  }
+}
+
+async function tapElement(deviceId, element) {
+  requireDeviceId(deviceId)
+  if (!element?.bounds) throw new Error("element bounds are required")
+  await run("adb", adbArgs(deviceId, [
+    "shell",
+    "input",
+    "tap",
+    String(element.bounds.centerX),
+    String(element.bounds.centerY)
+  ]))
+}
+
+function recordingKey(deviceId) {
+  return deviceId || "default"
+}
+
+function startScreenRecording(deviceId) {
+  requireDeviceId(deviceId)
+  const key = recordingKey(deviceId)
+  if (activeScreenRecordings.has(key)) throw new Error("screen recording already active")
+
+  const remotePath = `/sdcard/qa-agent-recording-${Date.now()}.mp4`
+  const child = spawn("adb", adbArgs(deviceId, [
+    "shell",
+    "screenrecord",
+    "--time-limit",
+    "180",
+    remotePath
+  ]), {
+    stdio: "ignore"
+  })
+
+  activeScreenRecordings.set(key, {
+    child,
+    remotePath,
+    startedAt: Date.now()
+  })
+
+  child.on("exit", () => {
+    const active = activeScreenRecordings.get(key)
+    if (active?.child === child) active.exited = true
+  })
+
+  return { remotePath }
+}
+
+async function stopScreenRecording(deviceId) {
+  requireDeviceId(deviceId)
+  const key = recordingKey(deviceId)
+  const active = activeScreenRecordings.get(key)
+  if (!active) throw new Error("screen recording is not active")
+
+  if (!active.exited) {
+    active.child.kill("SIGINT")
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+  }
+
+  const localPath = path.join(os.tmpdir(), `qa-agent-recording-${Date.now()}.mp4`)
+  await run("adb", adbArgs(deviceId, ["pull", active.remotePath, localPath]), {
+    timeout: 60000,
+    maxBuffer: 10 * 1024 * 1024
+  })
+  await run("adb", adbArgs(deviceId, ["shell", "rm", "-f", active.remotePath])).catch(() => {})
+  activeScreenRecordings.delete(key)
+
+  const data = await fs.readFile(localPath)
+  await fs.unlink(localPath).catch(() => {})
+
+  return {
+    mimeType: "video/mp4",
+    dataUrl: `data:video/mp4;base64,${data.toString("base64")}`,
+    durationMs: Date.now() - active.startedAt
+  }
+}
+
+async function startActionRecording(deviceId) {
+  requireDeviceId(deviceId)
+  const key = recordingKey(deviceId)
+  if (activeActionRecordings.has(key)) throw new Error("action recording already active")
+  const before = await dumpUi(deviceId)
+  activeActionRecordings.set(key, {
+    startedAt: Date.now(),
+    before
+  })
+  return {
+    startedAt: activeActionRecordings.get(key).startedAt,
+    beforeElementCount: before.elements.length,
+    focusedWindow: before.focusedWindow
+  }
+}
+
+async function stopActionRecording(deviceId) {
+  requireDeviceId(deviceId)
+  const key = recordingKey(deviceId)
+  const active = activeActionRecordings.get(key)
+  if (!active) throw new Error("action recording is not active")
+
+  const after = await dumpUi(deviceId)
+  const screenshotDataUrl = await captureScreenshot(deviceId).catch(() => null)
+  activeActionRecordings.delete(key)
+
+  const beforeLabels = new Set(active.before.elements.map((element) => element.label).filter(Boolean))
+  const newElements = after.elements
+    .filter((element) => element.label && !beforeLabels.has(element.label))
+    .slice(0, 12)
+
+  return {
+    startedAt: active.startedAt,
+    stoppedAt: Date.now(),
+    durationMs: Date.now() - active.startedAt,
+    beforeElementCount: active.before.elements.length,
+    afterElementCount: after.elements.length,
+    beforeFocusedWindow: active.before.focusedWindow,
+    afterFocusedWindow: after.focusedWindow,
+    newElements,
+    screenshotDataUrl
+  }
 }
 
 async function listApps(deviceId) {
@@ -196,6 +454,52 @@ async function route(req, res) {
       }
       await startApp(body.deviceId ?? "", body.packageName)
       json(res, 200, { ok: true })
+      return
+    }
+
+    if (req.method === "POST" && url.pathname === "/capture/screenshot") {
+      const body = await readBody(req)
+      json(res, 200, {
+        ok: true,
+        dataUrl: await captureScreenshot(body.deviceId ?? "")
+      })
+      return
+    }
+
+    if (req.method === "GET" && url.pathname === "/ui/elements") {
+      const deviceId = url.searchParams.get("deviceId") ?? ""
+      json(res, 200, await dumpUi(deviceId))
+      return
+    }
+
+    if (req.method === "POST" && url.pathname === "/ui/tap") {
+      const body = await readBody(req)
+      await tapElement(body.deviceId ?? "", body.element)
+      json(res, 200, { ok: true })
+      return
+    }
+
+    if (req.method === "POST" && url.pathname === "/screenrecord/start") {
+      const body = await readBody(req)
+      json(res, 200, { ok: true, ...startScreenRecording(body.deviceId ?? "") })
+      return
+    }
+
+    if (req.method === "POST" && url.pathname === "/screenrecord/stop") {
+      const body = await readBody(req)
+      json(res, 200, { ok: true, ...(await stopScreenRecording(body.deviceId ?? "")) })
+      return
+    }
+
+    if (req.method === "POST" && url.pathname === "/actions/start") {
+      const body = await readBody(req)
+      json(res, 200, { ok: true, ...(await startActionRecording(body.deviceId ?? "")) })
+      return
+    }
+
+    if (req.method === "POST" && url.pathname === "/actions/stop") {
+      const body = await readBody(req)
+      json(res, 200, { ok: true, ...(await stopActionRecording(body.deviceId ?? "")) })
       return
     }
 
