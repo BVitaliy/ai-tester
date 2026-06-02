@@ -1,0 +1,68 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /*
+   * Colour palette for the Jack QA extension.  We use a dark
+   * background with a vibrant purple as the primary accent.  These
+   * variables are consumed by our custom components.  You can tweak
+   * these values to adjust the theme without touching component code.
+   */
+  --primary: #e70000;
+  --bg: #020202;
+  --fg: #ffffff;
+  --card: #0f0f0f;
+  --border: rgba(255, 255, 255, 0.2);
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--fg);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.75); }
+}
+
+/* Custom violet scrollbar — applied to all scrollable areas */
+.jack-scroll,
+.popup-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.jack-scroll::-webkit-scrollbar,
+.popup-scroll::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+.jack-scroll::-webkit-scrollbar-track,
+.popup-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.jack-scroll::-webkit-scrollbar-thumb,
+.popup-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 99px;
+}
+/* Fade in on container hover */
+.jack-scroll:hover,
+.popup-scroll:hover {
+  scrollbar-color: rgba(231, 0, 0, 0.35) transparent;
+}
+.jack-scroll:hover::-webkit-scrollbar-thumb,
+.popup-scroll:hover::-webkit-scrollbar-thumb {
+  background: rgba(231, 0, 0, 0.35);
+}
+/* Full violet on thumb hover (actively scrolling area) */
+.jack-scroll:hover::-webkit-scrollbar-thumb:hover,
+.popup-scroll:hover::-webkit-scrollbar-thumb:hover {
+  background: #e70000;
+}
