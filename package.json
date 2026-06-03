@@ -13,7 +13,11 @@
     "prebuild": "node scripts/patch-plasmo-popup-template.mjs",
     "build": "plasmo build",
     "package": "plasmo package",
-    "agent": "node qa-agent/server.mjs"
+    "agent": "node qa-agent/server.mjs",
+    "agent:install": "node scripts/install-agent-service.mjs",
+    "agent:uninstall": "node scripts/uninstall-agent-service.mjs",
+    "agent:status": "node scripts/agent-status.mjs",
+    "companion:build": "node scripts/build-companion-app.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",

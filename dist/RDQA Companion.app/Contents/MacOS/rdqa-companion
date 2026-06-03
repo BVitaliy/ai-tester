@@ -1,0 +1,5 @@
+#!/bin/zsh
+set -e
+APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+RESOURCES="$APP_DIR/Resources"
+exec "$RESOURCES/node/node" "$RESOURCES/companion.mjs"

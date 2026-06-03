@@ -31,8 +31,17 @@ async function callOpenAICompatOnce(
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
+    const apiError = (err as any)?.error
+    const metadata = apiError?.metadata
+    const detail = [
+      metadata?.raw,
+      metadata?.message,
+      metadata?.provider_name ? `upstream provider: ${metadata.provider_name}` : null,
+      apiError?.code ? `code: ${apiError.code}` : null
+    ].filter(Boolean).join(" | ")
+    const message = apiError?.message ?? `API error ${res.status} from ${baseUrl}`
     throw new Error(
-      (err as any)?.error?.message ?? `API error ${res.status} from ${baseUrl}`
+      detail ? `${message}: ${detail}` : message
     )
   }
   const data = await res.json()
@@ -189,6 +198,262 @@ function parseFiles(raw: string): GeneratedFile[] {
     )
   }
   return []
+}
+
+type MobileStepAction = "tap" | "input" | "assertVisible" | "assertNotVisible" | "wait"
+
+export interface GeneratedMobileStep {
+  id: string
+  ideaId?: string
+  action: MobileStepAction
+  target?: string
+  value?: string
+  timeoutMs?: number
+  description: string
+}
+
+function parseMobileSteps(raw: string): GeneratedMobileStep[] {
+  const parsed = extractJson(raw)
+  if (!Array.isArray(parsed)) return []
+  const allowed = new Set(["tap", "input", "assertVisible", "assertNotVisible", "wait"])
+  const invalidTargets = new Set([
+    "test",
+    "check",
+    "verify",
+    "треба",
+    "перевір",
+    "перевірити",
+    "користувач",
+    "додаток",
+    "екран",
+    "форма",
+    "поле",
+    "кнопка",
+    "перейти",
+    "перейди",
+    "navigate",
+    "go"
+  ])
+  return parsed
+    .filter((step: any) => allowed.has(step?.action) && typeof step?.description === "string")
+    .filter((step: any) => {
+      if (step.action === "wait") return true
+      if (typeof step.target !== "string" || !step.target.trim()) return false
+      return !invalidTargets.has(step.target.trim().toLowerCase())
+    })
+    .map((step: any, index) => ({
+      id: typeof step.id === "string" && step.id ? step.id : `step-${index + 1}`,
+      ideaId: typeof step.ideaId === "string" ? step.ideaId : undefined,
+      action: step.action as MobileStepAction,
+      target: typeof step.target === "string" ? step.target.trim() : undefined,
+      value: typeof step.value === "string" ? step.value : undefined,
+      timeoutMs: typeof step.timeoutMs === "number" ? step.timeoutMs : undefined,
+      description: step.description.trim()
+    }))
+}
+
+const MOBILE_TARGET_STOP_WORDS = new Set([
+  "test",
+  "case",
+  "check",
+  "verify",
+  "should",
+  "треба",
+  "перевір",
+  "перевірити",
+  "користувач",
+  "додаток",
+  "екран",
+  "форма",
+  "форму",
+  "поле",
+  "поля",
+  "кнопка",
+  "кнопку",
+  "заповнити",
+  "відправити",
+  "запит",
+  "перейде",
+  "сторінку",
+  "успіху"
+])
+
+function extractQuotedTarget(value: string): string | null {
+  const match = value.match(/["'«“](.+?)["'»”]/)
+  return match?.[1]?.trim() || null
+}
+
+function extractLikelyTarget(value: string): string | null {
+  const quoted = extractQuotedTarget(value)
+  if (quoted) return quoted
+
+  const tokens = value
+    .split(/[^\p{L}\p{N}_-]+/u)
+    .map((token) => token.trim())
+    .filter(Boolean)
+
+  const appLike = tokens.find((token) => /[A-ZА-ЯІЇЄҐ][\p{L}\p{N}_-]{3,}/u.test(token) && !MOBILE_TARGET_STOP_WORDS.has(token.toLowerCase()))
+  if (appLike) return appLike
+
+  const technical = tokens.find((token) => /[_-]/.test(token) && token.length >= 4 && !MOBILE_TARGET_STOP_WORDS.has(token.toLowerCase()))
+  if (technical) return technical
+
+  return null
+}
+
+function normalizeMobileText(value: string) {
+  return value.toLowerCase().replace(/[’`]/g, "'").replace(/ʼ/g, "'")
+}
+
+function looksLikeMobileFlow(value: string) {
+  return /(клікн|перейти|перейди|заповнити|ввести|натисн|погодит|реєстрац|зареєстру|register|sign up|fill|tap|click|submit)/iu.test(value)
+}
+
+function extractVisibleTargetsFromContext(context: string): string[] {
+  const targets: string[] = []
+  const seen = new Set<string>()
+  for (const line of context.split("\n")) {
+    const match = line.match(/^\s*\d+\.\s*(.+)$/)
+    if (!match) continue
+    for (const rawPart of match[1].split("|")) {
+      const part = rawPart.trim()
+      if (!part || part === "clickable" || /^XCUIElementType/i.test(part) || /^android\./i.test(part)) continue
+      const value = part.replace(/^(resource-id|content-desc)=/i, "").trim()
+      const key = normalizeMobileText(value)
+      if (value && !seen.has(key)) {
+        seen.add(key)
+        targets.push(value)
+      }
+    }
+  }
+  return targets
+}
+
+function findVisibleTarget(targets: string[], keywords: string[]) {
+  const normalizedKeywords = keywords.map(normalizeMobileText)
+  return targets.find((target) => {
+    const normalized = normalizeMobileText(target)
+    return normalizedKeywords.some((keyword) => normalized.includes(keyword))
+  }) ?? null
+}
+
+function valueAfter(text: string, pattern: RegExp) {
+  return text.match(pattern)?.[1]?.trim().replace(/[,.]$/, "") || null
+}
+
+function submitTargetFromText(text: string) {
+  return text.match(/(?:кнопк[ауи]?|натиснути|клікнути)\s+([A-ZА-ЯІЇЄҐ][^,.]+)/iu)?.[1]?.trim() ?? null
+}
+
+function userIconTargetFromText(text: string) {
+  if (!/(юзер|користувач|профіль|акаунт|account|profile|user|login|логін|увійти|вхід)/iu.test(text)) return null
+  return "user"
+}
+
+function buildFallbackMobileFlowSteps(ideas: TestCaseIdea[], context: string): GeneratedMobileStep[] {
+  const targets = extractVisibleTargetsFromContext(context)
+  const steps: GeneratedMobileStep[] = []
+
+  for (const idea of ideas) {
+    const text = idea.text
+    if (!looksLikeMobileFlow(text)) continue
+
+    const normalized = normalizeMobileText(text)
+    const email = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] ?? "test123@example.com"
+    const firstName = valueAfter(text, /(?:ім[ʼ'’`]?я|name|first name)\s+([^,\s]+)/iu) ?? "Test"
+    const lastName = valueAfter(text, /(?:прізвище|surname|last name)\s+([^,\s]+)/iu) ?? "User"
+    const password = valueAfter(text, /(?:пароль|password)\s+([^,\s]+)/iu) ?? "Test12345"
+    const confirmPassword = valueAfter(text, /(?:підтвердження пароля|повторіть пароль|confirm password)\s+([^,\s]+)/iu) ?? password
+
+    const wantsFirstName = /ім[ʼ'’`]?я|first name|name/iu.test(text)
+    const wantsLastName = /прізвище|surname|last name/iu.test(text)
+    const wantsEmail = /email|e-mail|пошт/iu.test(text)
+    const wantsPassword = /пароль|password/iu.test(text)
+    const wantsConfirmPassword = /підтвердження пароля|повторіть пароль|confirm password/iu.test(text)
+    const wantsRules = /погод|правил|terms|privacy/iu.test(text)
+    const wantsSubmit = /натисн|клікн|зареєстру|submit|register|sign up/iu.test(text)
+    const wantsLoginPage = /логін|логіну|увійти|вхід|login|sign in/iu.test(text)
+    const wantsRegistrationPage = /реєстрац|зареєстру|register|sign up/iu.test(text)
+
+    const loginTarget =
+      findVisibleTarget(targets, ["увійти", "логін", "вхід", "login", "sign in"]) ??
+      findVisibleTarget(targets, ["profile", "account", "user", "профіль", "акаунт", "користувач"]) ??
+      userIconTargetFromText(text)
+    const registrationLinkTarget =
+      findVisibleTarget(targets, ["зареєстр", "реєстрац", "sign up", "register", "створити", "обліковий"]) ??
+      (wantsRegistrationPage ? "Зареєструватись" : null)
+    const firstNameTarget = findVisibleTarget(targets, ["ім'я", "ваше ім", "first name"]) ?? (wantsFirstName ? "Ваше ім" : null)
+    const lastNameTarget = findVisibleTarget(targets, ["прізвище", "surname", "last name"]) ?? (wantsLastName ? "Ваше прізвище" : null)
+    const emailTarget = findVisibleTarget(targets, ["email", "e-mail", "пошта"]) ?? (wantsEmail ? "Email" : null)
+    const confirmPasswordTarget = findVisibleTarget(targets, ["повтор", "підтвер", "confirm password"]) ?? (wantsConfirmPassword ? "Повторіть пароль" : null)
+    const passwordTarget = findVisibleTarget(targets, ["введіть пароль", "пароль", "password"]) ?? (wantsPassword ? "Введіть Пароль" : null)
+    const rulesTarget = findVisibleTarget(targets, ["погодж", "правил", "terms", "privacy"]) ?? (wantsRules ? "Правилами Користування" : null)
+    const submitTarget = findVisibleTarget(targets, ["зареєстр", "register", "sign up", "submit"]) ?? (wantsSubmit ? submitTargetFromText(text) ?? "Зареєструватись" : null)
+
+    const hasRegistrationFields = Boolean(firstNameTarget || lastNameTarget || emailTarget || passwordTarget)
+    if (!hasRegistrationFields) {
+      if (wantsLoginPage && loginTarget) {
+        steps.push({
+          id: `${idea.id}-open-login`,
+          ideaId: idea.id,
+          action: "tap",
+          target: loginTarget,
+          timeoutMs: 10000,
+          description: "Перейти на екран логіну через іконку користувача або кнопку входу"
+        })
+        steps.push({
+          id: `${idea.id}-wait-login`,
+          ideaId: idea.id,
+          action: "wait",
+          timeoutMs: 1200,
+          description: "Дочекатися відкриття екрана логіну"
+        })
+      }
+
+      const navigationTarget = registrationLinkTarget
+      if (wantsRegistrationPage && navigationTarget) {
+        steps.push({
+          id: `${idea.id}-open-registration`,
+          ideaId: idea.id,
+          action: "tap",
+          target: navigationTarget,
+          timeoutMs: 10000,
+          description: "Перейти на екран реєстрації"
+        })
+        steps.push({
+          id: `${idea.id}-wait-registration`,
+          ideaId: idea.id,
+          action: "wait",
+          timeoutMs: 1200,
+          description: "Дочекатися відкриття екрана реєстрації"
+        })
+      }
+    }
+
+    if (firstNameTarget) {
+      steps.push({ id: `${idea.id}-first-name`, ideaId: idea.id, action: "input", target: firstNameTarget, value: firstName, timeoutMs: 10000, description: `Ввести ім'я ${firstName}` })
+    }
+    if (lastNameTarget) {
+      steps.push({ id: `${idea.id}-last-name`, ideaId: idea.id, action: "input", target: lastNameTarget, value: lastName, timeoutMs: 10000, description: `Ввести прізвище ${lastName}` })
+    }
+    if (emailTarget) {
+      steps.push({ id: `${idea.id}-email`, ideaId: idea.id, action: "input", target: emailTarget, value: email, timeoutMs: 10000, description: `Ввести email ${email}` })
+    }
+    if (passwordTarget) {
+      steps.push({ id: `${idea.id}-password`, ideaId: idea.id, action: "input", target: passwordTarget, value: password, timeoutMs: 10000, description: "Ввести пароль" })
+    }
+    if (confirmPasswordTarget && confirmPasswordTarget !== passwordTarget) {
+      steps.push({ id: `${idea.id}-confirm-password`, ideaId: idea.id, action: "input", target: confirmPasswordTarget, value: confirmPassword, timeoutMs: 10000, description: "Підтвердити пароль" })
+    }
+    if (rulesTarget && wantsRules) {
+      steps.push({ id: `${idea.id}-terms`, ideaId: idea.id, action: "tap", target: rulesTarget, timeoutMs: 10000, description: "Погодитися з правилами" })
+    }
+    if (submitTarget && wantsSubmit) {
+      steps.push({ id: `${idea.id}-submit`, ideaId: idea.id, action: "tap", target: submitTarget, timeoutMs: 10000, description: "Натиснути кнопку реєстрації" })
+    }
+  }
+
+  return steps
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -466,6 +731,218 @@ Return ONLY the class file content, no markdown fences, no explanation.`
     console.warn("[generateCode] AI failed, using stub:", err)
     return generateCodeStub(opts)
   }
+}
+
+export async function generateMobileCode(opts: {
+  ideas: TestCaseIdea[]
+  context: JackSessionState
+  provider: string
+  model: string
+}): Promise<GeneratedFile[]> {
+  const { ideas, context, provider, model } = opts
+  const ideasText = ideas.map((idea, i) => `${i + 1}. ${idea.text}`).join("\n")
+  const contextText = [
+    context.mediaDescription,
+    context.htmlContext ? `Selected element context:\n${context.htmlContext}` : null,
+    context.customPrompt ? `Mobile QA context:\n${context.customPrompt}` : null,
+  ].filter(Boolean).join("\n\n")
+
+  const systemPrompt = `You are a senior QA automation engineer writing mobile E2E tests.
+Generate Appium WebdriverIO TypeScript tests for Android/iOS mobile apps.
+
+Rules:
+- Write COMPLETE test implementations. Do not leave TODO-only test bodies.
+- Prefer accessibility id, Flutter Semantics labels, Android resource-id, iOS accessibility id/name, visible text, and content-desc.
+- Avoid raw coordinate taps unless the context explicitly says there is no stable locator.
+- Support both Android package names and iOS bundle ids when mentioned.
+- Use async WebdriverIO/Appium syntax: $, $$, expect, click, setValue, waitForDisplayed.
+- Return ONLY a valid JSON array of files, no markdown:
+[
+  {"path":"pages/MobileApp.screen.ts","content":"..."},
+  {"path":"tests/mobile.appium.spec.ts","content":"..."},
+  {"path":"README.md","content":"..."}
+]`
+
+  const userMessage = `Test cases to implement:\n${ideasText}
+
+Context:
+${contextText || "Generic mobile application"}
+
+Create a reusable screen object and a spec file. Include setup notes in README.md for running with Appium/WebdriverIO.`
+
+  try {
+    const raw = await callAI(provider, model, systemPrompt, userMessage, 8192)
+    const files = parseFiles(raw)
+    if (files.length > 0) return files
+    throw new Error("mobile files parse failed")
+  } catch (err) {
+    console.warn("[generateMobileCode] AI failed, using stub:", err)
+    return generateMobileCodeStub(opts)
+  }
+}
+
+export async function generateMobileSteps(opts: {
+  ideas: TestCaseIdea[]
+  context: string
+  provider: string
+  model: string
+  lang?: string
+}): Promise<GeneratedMobileStep[]> {
+  const { ideas, context, provider, model, lang = "uk" } = opts
+  const ideasText = ideas.map((idea, i) => `${i + 1}. [${idea.id}] ${idea.text}`).join("\n")
+  const langNote = lang === "en" ? "English" : "Ukrainian"
+  const systemPrompt = `You convert mobile QA ideas into executable Appium-style steps.
+
+Return ONLY a valid JSON array. No markdown.
+
+Allowed actions:
+- assertVisible: verify an element/text/accessibility id is visible
+- assertNotVisible: verify an element/text/accessibility id disappears
+- tap: tap a visible element
+- input: tap a text field and type value
+- wait: wait for timeoutMs
+
+Rules:
+- Every step must have: id, ideaId, action, description.
+- target is required for assertVisible, assertNotVisible, tap, input.
+- value is required for input.
+- timeoutMs is optional; use it for waits and timed assertions.
+- Prefer exact visible text, accessibility id, Flutter Semantics label, Android resource-id, iOS name/label.
+- Never use generic instruction words as target: "треба", "перевірити", "форма", "кнопка", "field", "button", "screen".
+- If an idea describes a user flow, decompose it into ordered executable steps.
+- If the flow starts from the home screen and says to open login while the user is not logged in, first tap the visible user/profile/account/login icon or accessibility id.
+- If the next instruction says to open registration from login, tap the visible register/sign-up/create-account link.
+- For navigation steps, use tap with the exact visible label from context when possible.
+- For form filling, use input with the visible field label/placeholder/accessibility id as target and realistic safe test values.
+- After a tap that changes screens, add a short wait step before the next assertion/input when useful.
+- If you cannot identify a concrete target from the idea/context, return no step for that idea.
+- Do not invent long flows if the idea lacks steps. Create a small executable smoke/check for the visible expected result.
+- For temporal ideas like splash disappearing, use wait + assertNotVisible.
+- Write descriptions in ${langNote}.`
+
+  const userMessage = `Mobile context:
+${context}
+
+Ideas:
+${ideasText}
+
+Return JSON like:
+[
+  {"id":"step-1","ideaId":"...","action":"assertVisible","target":"ProntoPizza","timeoutMs":10000,"description":"..."}
+]`
+
+  try {
+    const raw = await callAI(provider, model, systemPrompt, userMessage, 4096)
+    const steps = parseMobileSteps(raw)
+    const fallbackFlowSteps = buildFallbackMobileFlowSteps(ideas, context)
+    if (
+      fallbackFlowSteps.length > 1 &&
+      ideas.some((idea) => looksLikeMobileFlow(idea.text)) &&
+      (steps.length === 0 || (steps.length === 1 && steps[0].action === "assertVisible"))
+    ) {
+      return fallbackFlowSteps
+    }
+    if (steps.length > 0) return steps
+    throw new Error("steps parse failed")
+  } catch (err) {
+    console.warn("[generateMobileSteps] AI failed, using fallback:", err)
+    const fallbackFlowSteps = buildFallbackMobileFlowSteps(ideas, context)
+    if (fallbackFlowSteps.length > 0) return fallbackFlowSteps
+    if (ideas.some((idea) => looksLikeMobileFlow(idea.text))) return []
+    return ideas
+      .map((idea, index) => {
+        const target = extractLikelyTarget(idea.text)
+        if (!target) return null
+        return {
+          id: `step-${index + 1}`,
+          ideaId: idea.id,
+          action: "assertVisible" as const,
+          target,
+          timeoutMs: 10000,
+          description: idea.text
+        }
+      })
+      .filter((step): step is GeneratedMobileStep => step !== null)
+  }
+}
+
+function escapeTestName(value: string) {
+  return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'")
+}
+
+function generateMobileCodeStub(opts: {
+  ideas: TestCaseIdea[]
+  context: JackSessionState
+}): GeneratedFile[] {
+  const context = opts.context.customPrompt ?? "Mobile application"
+  const tests = opts.ideas.map((idea) => {
+    const name = escapeTestName(idea.text)
+    return [
+      `  it('${name}', async () => {`,
+      `    await app.waitForAppReady()`,
+      `    // Replace placeholder locators with accessibility ids/resource ids from the target app.`,
+      `    await expect(await app.root()).toBeDisplayed()`,
+      `  })`,
+    ].join("\n")
+  }).join("\n\n")
+
+  return [
+    {
+      path: "pages/MobileApp.screen.ts",
+      content: [
+        "export class MobileAppScreen {",
+        "  async root() {",
+        "    return $('android=new UiSelector().className(\"android.view.View\").instance(0)')",
+        "  }",
+        "",
+        "  async byText(text: string) {",
+        "    return $(`android=new UiSelector().textContains(\"${text}\")`)",
+        "  }",
+        "",
+        "  async byAccessibilityId(id: string) {",
+        "    return $(`~${id}`)",
+        "  }",
+        "",
+        "  async waitForAppReady() {",
+        "    const root = await this.root()",
+        "    await root.waitForDisplayed({ timeout: 10000 })",
+        "  }",
+        "}",
+      ].join("\n"),
+    },
+    {
+      path: "tests/mobile.appium.spec.ts",
+      content: [
+        "import { expect } from '@wdio/globals'",
+        "import { MobileAppScreen } from '../pages/MobileApp.screen'",
+        "",
+        "const app = new MobileAppScreen()",
+        "",
+        "describe('Generated mobile QA tests', () => {",
+        tests || [
+          "  it('opens the app and verifies the first screen', async () => {",
+          "    await app.waitForAppReady()",
+          "    await expect(await app.root()).toBeDisplayed()",
+          "  })",
+        ].join("\n"),
+        "})",
+      ].join("\n"),
+    },
+    {
+      path: "README.md",
+      content: [
+        "# Mobile QA tests",
+        "",
+        "Generated for this mobile testing context:",
+        "",
+        "```text",
+        context,
+        "```",
+        "",
+        "Run with a WebdriverIO + Appium setup. Replace placeholder selectors with stable accessibility ids, Flutter Semantics labels, Android resource-id, or iOS accessibility identifiers from the app.",
+      ].join("\n"),
+    },
+  ]
 }
 
 function generateCodeStub(opts: {

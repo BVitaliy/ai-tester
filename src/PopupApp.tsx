@@ -684,25 +684,44 @@ function MainPanel({ onOpenSettings, onOpenIdeas, onOpenCode, onOpenMobile }: { 
   );
 }
 
-type Screen = "main" | "settings" | "ideas" | "code" | "mobile";
+type Screen = "settings" | "code" | "mobile";
+
+const POPUP_SCREEN_KEY = "rdqaPopupScreen";
+const popupScreens: Screen[] = ["settings", "code", "mobile"];
+
+function isPopupScreen(value: unknown): value is Screen {
+  return typeof value === "string" && popupScreens.includes(value as Screen);
+}
 
 function IndexPopup() {
-  const [screen, setScreen] = useState<Screen>("main");
+  const [screen, setScreen] = useState<Screen>("mobile");
   const [lang, setLang] = useState<LangCode>("uk");
+
+  const goToScreen = React.useCallback((nextScreen: Screen) => {
+    setScreen(nextScreen);
+    chrome.storage.session.set({ [POPUP_SCREEN_KEY]: nextScreen }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     getUiLanguage().then(setLang);
+    chrome.storage.session.get(POPUP_SCREEN_KEY).then((result) => {
+      const storedScreen = result[POPUP_SCREEN_KEY];
+      if (isPopupScreen(storedScreen)) setScreen(storedScreen);
+    });
   }, []);
 
   const contextValue = React.useMemo(() => ({ lang, setLang, t: makeT(lang) }), [lang]);
 
   return (
     <LanguageContext.Provider value={contextValue}>
-      {screen === "settings" && <ProviderKeysSettings onBack={() => setScreen("main")} onLangChange={setLang} />}
-      {screen === "ideas" && <IdeasScreen onBack={() => setScreen("main")} onOpenCode={() => setScreen("code")} />}
-      {screen === "code" && <CodeScreen onBack={() => setScreen("ideas")} />}
-      {screen === "mobile" && <MobileTestingScreen onBack={() => setScreen("main")} />}
-      {screen === "main" && <MainPanel onOpenSettings={() => setScreen("settings")} onOpenIdeas={() => setScreen("ideas")} onOpenCode={() => setScreen("code")} onOpenMobile={() => setScreen("mobile")} />}
+      {screen === "settings" && <ProviderKeysSettings onBack={() => goToScreen("mobile")} onLangChange={setLang} />}
+      {screen === "code" && <CodeScreen onBack={() => goToScreen("mobile")} />}
+      {screen === "mobile" && (
+        <MobileTestingScreen
+          onOpenCode={() => goToScreen("code")}
+          onOpenSettings={() => goToScreen("settings")}
+        />
+      )}
     </LanguageContext.Provider>
   );
 }

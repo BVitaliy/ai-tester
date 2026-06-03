@@ -1,7 +1,7 @@
 import { submitToAi } from "./core/api"
 import type { Destination, EditorScreen } from "./core/types"
 import { isInspectableTabUrl, sendTabMessage } from "./lib/tabMessage"
-import { generateCode, generateTestIdeas, mediaToText } from "./core/api/aiService"
+import { generateCode, generateMobileCode, generateTestIdeas, mediaToText } from "./core/api/aiService"
 import {
   finishAnnotate,
   getGenStatus,
@@ -235,6 +235,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === "JACK_GENERATE_CODE") {
     runJackGenerateCode(message.sessionKey).then(() => sendResponse({ ok: true }))
+    return true
+  }
+
+  if (message.type === "JACK_GENERATE_MOBILE_CODE") {
+    runJackGenerateMobileCode(message.sessionKey).then(() => sendResponse({ ok: true }))
     return true
   }
 
@@ -700,5 +705,28 @@ async function runJackGenerateCode(sessionKey: string): Promise<void> {
   }
 }
 
-registerTabVideoCleanup()
+async function runJackGenerateMobileCode(sessionKey: string): Promise<void> {
+  try {
+    await setGenStatus({ phase: "generating-code", sessionKey })
+    const session = await getSessionState(sessionKey)
+    if (!session) throw new Error("Session not found")
 
+    const settings = await getSettings()
+    const selected = settings?.selectedModels
+    const files = await generateMobileCode({
+      ideas: session.testIdeas,
+      context: session,
+      provider: selected?.codeGenProvider ?? "openai",
+      model: selected?.codeGenModel ?? "gpt-4o-mini",
+    })
+    await updateSessionState({ generatedFiles: files }, sessionKey)
+    await setGenStatus({ phase: "idle" })
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
+    await chrome.storage.local.set({
+      jackGenStatus: { phase: "error", sessionKey, error, failedPhase: "code" },
+    })
+  }
+}
+
+registerTabVideoCleanup()

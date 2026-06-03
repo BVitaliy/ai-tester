@@ -12,7 +12,8 @@ export interface MobileDevice {
   id: string
   name: string
   state: string
-  type: "usb" | "emulator"
+  type: "usb" | "emulator" | "simulator"
+  platform?: "android" | "ios"
   details: Record<string, string>
 }
 
@@ -28,6 +29,7 @@ export interface MobileApp {
 export interface MobileDevicesResult {
   connected: MobileDevice[]
   availableEmulators: AvailableEmulator[]
+  availableIosSimulators?: MobileDevice[]
 }
 
 export interface MobileElementBounds {
@@ -86,6 +88,47 @@ export interface MobileActionRecordingResult {
   screenshotDataUrl?: string | null
 }
 
+export type MobileTestStatus = "passed" | "failed" | "blocked"
+
+export type MobileStepAction = "tap" | "input" | "assertVisible" | "assertNotVisible" | "wait"
+
+export interface MobileExecutableStep {
+  id: string
+  ideaId?: string
+  action: MobileStepAction
+  target?: string
+  value?: string
+  timeoutMs?: number
+  description: string
+}
+
+export interface MobileTestResultItem {
+  id: string
+  title: string
+  status: MobileTestStatus
+  message: string
+  evidence: string[]
+  error?: string
+}
+
+export interface MobileTestRunResult {
+  ok: boolean
+  platform: "android" | "ios"
+  packageName: string
+  startedAt: number
+  finishedAt: number
+  durationMs: number
+  focusedWindow: string
+  elementCount: number
+  screenshotDataUrl?: string | null
+  summary: {
+    passed: number
+    failed: number
+    blocked: number
+  }
+  results: MobileTestResultItem[]
+}
+
 async function agentFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${DEFAULT_AGENT_URL}${path}`, {
     ...init,
@@ -126,6 +169,13 @@ export function startAndroidEmulator(name: string): Promise<{ ok: boolean }> {
   return agentFetch<{ ok: boolean }>("/emulators/start", {
     method: "POST",
     body: JSON.stringify({ name })
+  })
+}
+
+export function startIosSimulator(deviceId: string): Promise<{ ok: boolean }> {
+  return agentFetch<{ ok: boolean }>("/simulators/ios/start", {
+    method: "POST",
+    body: JSON.stringify({ deviceId })
   })
 }
 
@@ -176,5 +226,27 @@ export function stopMobileActionRecording(deviceId: string): Promise<MobileActio
   return agentFetch<MobileActionRecordingResult>("/actions/stop", {
     method: "POST",
     body: JSON.stringify({ deviceId })
+  })
+}
+
+export function runMobileTests(
+  deviceId: string,
+  packageName: string,
+  ideas: Array<{ id: string; text: string }>
+): Promise<MobileTestRunResult> {
+  return agentFetch<MobileTestRunResult>("/tests/mobile/run", {
+    method: "POST",
+    body: JSON.stringify({ deviceId, packageName, ideas })
+  })
+}
+
+export function runMobileSteps(
+  deviceId: string,
+  packageName: string,
+  steps: MobileExecutableStep[]
+): Promise<MobileTestRunResult> {
+  return agentFetch<MobileTestRunResult>("/tests/mobile/steps", {
+    method: "POST",
+    body: JSON.stringify({ deviceId, packageName, steps })
   })
 }
