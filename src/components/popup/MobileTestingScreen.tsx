@@ -23,12 +23,14 @@ import {
   type MobileDevice,
   type MobileElement,
   type MobileExecutableStep,
+  type MobileTestResultItem,
   type MobileTestRunResult,
   type MobileTestStatus
 } from "../../core/api/mobileAgent"
 import { generateMobileSteps, generateTestIdeas } from "../../core/api/aiService"
 import type { TestCaseIdea } from "../../core/types"
 import { useLanguage } from "../../contexts/LanguageContext"
+import type { StringKey } from "../../core/i18n"
 import { cn } from "../../lib/cn"
 import { compressDataUrl } from "../../lib/screenshotStorage"
 import { getSettings, setLastSessionKey, updateSessionState } from "../../store/jack"
@@ -77,11 +79,15 @@ const panelStyle: React.CSSProperties = {
   padding: 10
 }
 
-function statusText(health: MobileAgentHealth | null, error: string | null) {
+function statusText(
+  health: MobileAgentHealth | null,
+  error: string | null,
+  t: (key: StringKey, params?: Record<string, string | number>) => string
+) {
   if (error) return error
-  if (!health) return "Перевіряю локальний qa-agent..."
-  if (!health.adb) return "qa-agent працює, але adb не знайдено в PATH"
-  return `qa-agent ${health.version}: adb ${health.adb ? "ok" : "missing"}, emulator ${health.emulator ? "ok" : "missing"}, appium ${health.appium ? "ok" : "missing"}`
+  if (!health) return t("mCheckingAgent")
+  if (!health.adb) return t("mAdbMissing")
+  return `qa-agent ${health.version}: adb ${health.adb ? t("mOk") : t("mMissing")}, emulator ${health.emulator ? t("mOk") : t("mMissing")}, appium ${health.appium ? t("mOk") : t("mMissing")}`
 }
 
 function mobileSessionKey(deviceId: string, packageName: string) {
@@ -94,10 +100,67 @@ function testStatusColor(status: MobileTestStatus) {
   return "#f59e0b"
 }
 
-function testStatusLabel(status: MobileTestStatus) {
-  if (status === "passed") return "Passed"
-  if (status === "failed") return "Failed"
-  return "Needs support"
+function testStatusLabel(
+  status: MobileTestStatus,
+  t: (key: StringKey) => string
+) {
+  if (status === "passed") return t("mPassed")
+  if (status === "failed") return t("mFailed")
+  return t("mNeedsSupport")
+}
+
+function stepActionLabel(
+  action: MobileExecutableStep["action"],
+  t: (key: StringKey) => string
+) {
+  if (action === "tap") return t("mActionTap")
+  if (action === "input") return t("mActionInput")
+  if (action === "assertVisible") return t("mActionAssertVisible")
+  if (action === "assertNotVisible") return t("mActionAssertHidden")
+  if (action === "wait") return t("mActionWait")
+  return t("mActionScroll")
+}
+
+function resultTitleLabel(
+  id: string,
+  fallback: string,
+  t: (key: StringKey) => string
+) {
+  if (id === "launch-app") return t("mSetupLaunchApp")
+  if (id === "read-ui-tree") return t("mSetupReadUi")
+  if (id === "capture-screenshot") return t("mSetupScreenshot")
+  return fallback
+}
+
+function resultMessageLabel(
+  message: string,
+  t: (key: StringKey, params?: Record<string, string | number>) => string
+) {
+  let match = message.match(/^Waited (\d+)ms$/)
+  if (match) return t("mMsgWaited", { ms: match[1] })
+  match = message.match(/^Found visible target: (.+)$/)
+  if (match) return t("mMsgFoundVisible", { target: match[1] })
+  match = message.match(/^Expected visible target was not found: (.+)$/)
+  if (match) return t("mMsgExpectedNotFound", { target: match[1] })
+  match = message.match(/^Tapped target: (.+)$/)
+  if (match) return t("mMsgTapped", { target: match[1] })
+  match = message.match(/^Typed into target: (.+)$/)
+  if (match) return t("mMsgTyped", { target: match[1] })
+  match = message.match(/^Target was not found: (.+)$/)
+  if (match) return t("mMsgTargetNotFound", { target: match[1] })
+  match = message.match(/^Final screenshot captured$/)
+  if (match) return t("mMsgFinalScreenshot")
+  match = message.match(/^Could not read UI tree$/)
+  if (match) return t("mMsgCouldNotReadUi")
+  match = message.match(/^UI tree is empty$/)
+  if (match) return t("mMsgUiEmpty")
+  match = message.match(/^Read (\d+) UI elements/)
+  if (match) return t("mMsgReadUiElements", { n: match[1] })
+  match = message.match(/^(.+) launched on (.+)$/)
+  if (match) return t("mMsgLaunchedOn", { app: match[1], platform: match[2] })
+  match = message.match(/^Could not launch selected app$/)
+  if (match) return t("mMsgCouldNotLaunch")
+  return message
 }
 
 const setupResultIds = new Set(["launch-app", "capture-screenshot", "read-ui-tree"])
@@ -141,6 +204,21 @@ function progressStatusColor(status: string) {
   return "#64748b"
 }
 
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;")
+}
+
+function reportStatusColor(status: MobileTestStatus) {
+  if (status === "passed") return "#16a34a"
+  if (status === "failed") return "#dc2626"
+  return "#d97706"
+}
+
 function elementTarget(element: MobileElement) {
   return element.resourceId || element.contentDesc || element.text || element.label
 }
@@ -149,8 +227,142 @@ function elementLabel(element: MobileElement) {
   return element.text || element.contentDesc || element.resourceId || element.label
 }
 
+function buildHtmlReport(opts: {
+  lang: string
+  title: string
+  device: string
+  app: string
+  platform: string
+  duration: string
+  summary: { passed: number; failed: number; blocked: number }
+  ideas: TestCaseIdea[]
+  steps: MobileExecutableStep[]
+  results: MobileTestResultItem[]
+  t: (key: StringKey, params?: Record<string, string | number>) => string
+}) {
+  const { lang, title, device, app, platform, duration, summary, ideas, steps, results, t } = opts
+  const resultsById = new Map(results.map((item) => [item.id, item]))
+
+  const setupRows = results
+    .filter((item) => setupResultIds.has(item.id))
+    .map((item) => `
+      <li>
+        <span class="dot" style="background:${reportStatusColor(item.status)}"></span>
+        <strong>${escapeHtml(resultTitleLabel(item.id, item.title, t))}</strong>
+        <span>${escapeHtml(resultMessageLabel(item.message, t))}</span>
+      </li>
+    `).join("")
+
+  const stepRows = steps.map((step, index) => {
+    const item = resultsById.get(step.id)
+    const status = item?.status ?? "blocked"
+    const screenshot = item?.screenshotDataUrl
+      ? `<img class="shot" src="${item.screenshotDataUrl}" alt="Screenshot for step ${index + 1}" />`
+      : `<div class="no-shot">${escapeHtml(item?.screenshotError ?? "No screenshot captured")}</div>`
+    return `
+      <article class="step">
+        <div class="step-head">
+          <span class="num">${index + 1}</span>
+          <div>
+            <h3>${escapeHtml(step.description)}</h3>
+            <p>${escapeHtml(stepActionLabel(step.action, t))}${step.target ? ` -> ${escapeHtml(step.target)}` : ""}${step.value ? ` = ${escapeHtml(step.value)}` : ""}</p>
+          </div>
+          <span class="badge" style="background:${reportStatusColor(status)}">${escapeHtml(testStatusLabel(status, t))}</span>
+        </div>
+        ${item?.message ? `<p class="message">${escapeHtml(resultMessageLabel(item.message, t))}</p>` : ""}
+        ${item?.error ? `<p class="error">${escapeHtml(item.error)}</p>` : ""}
+        ${item?.evidence?.length ? `<p class="evidence">${escapeHtml(t("mEvidence"))}: ${item.evidence.map(escapeHtml).join(", ")}</p>` : ""}
+        ${screenshot}
+      </article>`
+  }).join("")
+
+  const unlinkedRows = results
+    .filter((item) => !setupResultIds.has(item.id) && !steps.some((step) => step.id === item.id))
+    .map((item, index) => `
+      <article class="step">
+        <div class="step-head">
+          <span class="num">${index + 1}</span>
+          <div>
+            <h3>${escapeHtml(item.title)}</h3>
+            <p>${escapeHtml(resultMessageLabel(item.message, t))}</p>
+          </div>
+          <span class="badge" style="background:${reportStatusColor(item.status)}">${escapeHtml(testStatusLabel(item.status, t))}</span>
+        </div>
+        ${item.error ? `<p class="error">${escapeHtml(item.error)}</p>` : ""}
+        ${item.screenshotDataUrl ? `<img class="shot" src="${item.screenshotDataUrl}" alt="Screenshot" />` : ""}
+      </article>
+    `).join("")
+
+  return `<!doctype html>
+<html lang="${escapeHtml(lang)}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(title)}</title>
+  <style>
+    :root { color-scheme: light; --fg:#111827; --muted:#6b7280; --line:#e5e7eb; --bg:#f9fafb; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--fg); background:var(--bg); }
+    main { max-width:1040px; margin:0 auto; padding:28px; }
+    header { display:flex; justify-content:space-between; gap:20px; align-items:flex-start; margin-bottom:22px; }
+    h1 { margin:0 0 8px; font-size:26px; }
+    h2 { margin:24px 0 12px; font-size:17px; }
+    h3 { margin:0 0 4px; font-size:14px; }
+    p { margin:0; }
+    .meta { color:var(--muted); font-size:13px; line-height:1.6; }
+    .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; min-width:330px; }
+    .card, .step, .panel { background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px; }
+    .card strong { display:block; font-size:24px; }
+    .card span { color:var(--muted); font-size:12px; }
+    ol { margin:0; padding-left:22px; line-height:1.55; }
+    .setup { list-style:none; margin:0; padding:0; display:grid; gap:8px; }
+    .setup li { display:flex; align-items:center; gap:8px; background:#fff; border:1px solid var(--line); border-radius:8px; padding:10px; font-size:13px; }
+    .dot { width:9px; height:9px; border-radius:99px; flex:none; }
+    .timeline { display:grid; gap:12px; }
+    .step-head { display:grid; grid-template-columns:auto 1fr auto; gap:10px; align-items:start; }
+    .num { width:26px; height:26px; border-radius:7px; background:#111827; color:#fff; display:inline-flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; }
+    .badge { color:#fff; border-radius:999px; padding:4px 8px; font-size:11px; font-weight:700; white-space:nowrap; }
+    .step-head p, .message, .evidence, .no-shot { color:var(--muted); font-size:12px; line-height:1.5; }
+    .message { margin-top:10px; }
+    .error { margin-top:8px; color:#dc2626; font-size:12px; }
+    .evidence { margin-top:8px; }
+    .shot { display:block; width:100%; max-height:760px; object-fit:contain; background:#000; border:1px solid var(--line); border-radius:8px; margin-top:12px; }
+    .no-shot { border:1px dashed var(--line); border-radius:8px; padding:12px; margin-top:12px; }
+    @media (max-width:760px) { main { padding:16px; } header { display:block; } .cards { grid-template-columns:1fr; min-width:0; margin-top:16px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>${escapeHtml(title)}</h1>
+        <div class="meta">
+          <div>${escapeHtml(t("mReportDevice"))}: ${escapeHtml(device)}</div>
+          <div>${escapeHtml(t("mReportApp"))}: ${escapeHtml(app)}</div>
+          <div>${escapeHtml(t("mReportPlatform"))}: ${escapeHtml(platform)}</div>
+          <div>${escapeHtml(t("mReportDuration"))}: ${escapeHtml(duration)}</div>
+        </div>
+      </div>
+      <div class="cards">
+        <div class="card"><strong style="color:#16a34a">${summary.passed}</strong><span>${escapeHtml(t("mPassed"))}</span></div>
+        <div class="card"><strong style="color:#dc2626">${summary.failed}</strong><span>${escapeHtml(t("mFailed"))}</span></div>
+        <div class="card"><strong style="color:#d97706">${summary.blocked}</strong><span>${escapeHtml(t("mNeedsSupport"))}</span></div>
+      </div>
+    </header>
+    <section class="panel">
+      <h2>${escapeHtml(t("mReportIdeas"))}</h2>
+      <ol>${ideas.map((idea) => `<li>${escapeHtml(idea.text)}</li>`).join("")}</ol>
+    </section>
+    <h2>${escapeHtml(t("mSetupChecks"))}</h2>
+    <ul class="setup">${setupRows}</ul>
+    <h2>${escapeHtml(t("mReportSteps"))}</h2>
+    <div class="timeline">${stepRows || unlinkedRows || `<div class="panel">${escapeHtml(t("mNoExecutableSteps"))}</div>`}</div>
+  </main>
+</body>
+</html>`
+}
+
 export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Props) {
-  const { lang } = useLanguage()
+  const { lang, t } = useLanguage()
   const [draftLoaded, setDraftLoaded] = useState(false)
   const [health, setHealth] = useState<MobileAgentHealth | null>(null)
   const [devices, setDevices] = useState<MobileDevice[]>([])
@@ -224,6 +436,18 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
     [ideaResults]
   )
 
+  const runnableIdeaCoverage = useMemo(() => {
+    const covered = new Set(
+      mobileSteps
+        .map((step) => step.ideaId)
+        .filter((ideaId): ideaId is string => Boolean(ideaId))
+    )
+    return {
+      covered: ideas.filter((idea) => covered.has(idea.id)).length,
+      total: ideas.length
+    }
+  }, [ideas, mobileSteps])
+
   const refresh = async () => {
     setLoading(true)
     setError(null)
@@ -250,8 +474,8 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       setApps([])
       setError(
         err instanceof Error
-          ? `${err.message}. Запусти: pnpm agent`
-          : "Не вдалося підключитися до qa-agent"
+          ? `${err.message}. ${t("mRunAgent")}`
+          : t("mErrConnect")
       )
     } finally {
       setLoading(false)
@@ -334,7 +558,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       })
       .catch((err) => {
         setApps([])
-        setError(err instanceof Error ? err.message : "Не вдалося отримати список apps")
+        setError(err instanceof Error ? err.message : t("mErrLoadApps"))
       })
       .finally(() => setAppsLoading(false))
   }, [selectedDeviceId])
@@ -346,7 +570,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
     try {
       await startMobileApp(selectedDeviceId, selectedPackage)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не вдалося запустити app")
+      setError(err instanceof Error ? err.message : t("mErrStartApp"))
     } finally {
       setLoading(false)
     }
@@ -359,7 +583,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       await startAndroidEmulator(name)
       setTimeout(refresh, 2500)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не вдалося запустити емулятор")
+      setError(err instanceof Error ? err.message : t("mErrStartEmulator"))
     } finally {
       setLoading(false)
     }
@@ -372,7 +596,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       await startIosSimulator(deviceId)
       setTimeout(refresh, 2500)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не вдалося запустити iOS Simulator")
+      setError(err instanceof Error ? err.message : t("mErrStartSimulator"))
     } finally {
       setLoading(false)
     }
@@ -387,7 +611,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       const compressed = await compressDataUrl(result.dataUrl, 1200, 0.82).catch(() => result.dataUrl)
       setMobileScreenshot(compressed)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не вдалося зробити скріншот app")
+      setError(err instanceof Error ? err.message : t("mErrScreenshot"))
     } finally {
       setLoading(false)
     }
@@ -407,7 +631,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
         setScreenRecording(false)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не вдалося записати відео app")
+      setError(err instanceof Error ? err.message : t("mErrVideo"))
       setScreenRecording(false)
     } finally {
       setLoading(false)
@@ -433,7 +657,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
         setActionRecording(false)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не вдалося записати дії app")
+      setError(err instanceof Error ? err.message : t("mErrActions"))
       setActionRecording(false)
     } finally {
       setLoading(false)
@@ -453,7 +677,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       setFocusedWindow(result.focusedWindow)
       setSelectedElementId(actionable[0]?.id ?? "")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не вдалося прочитати UI tree app")
+      setError(err instanceof Error ? err.message : t("mErrReadUI"))
     } finally {
       setLoading(false)
     }
@@ -467,7 +691,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       await tapMobileElement(selectedDeviceId, selectedElement)
       setTimeout(handleSelectElement, 700)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не вдалося натиснути selected element")
+      setError(err instanceof Error ? err.message : t("mErrTapElement"))
     } finally {
       setLoading(false)
     }
@@ -477,24 +701,24 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
     if (!selectedElement) return
     const target = elementTarget(selectedElement).trim()
     if (!target) {
-      setError("У вибраного елемента немає стабільного target. Спробуй інший елемент або додай accessibility id в app.")
+      setError(t("mErrNoTarget"))
       return
     }
     const value = action === "input" ? flowInputValue.trim() : undefined
     if (action === "input" && !value) {
-      setError("Для input step введи значення, яке треба набрати в полі.")
+      setError(t("mErrInputEmpty"))
       return
     }
 
     const label = elementLabel(selectedElement)
     const description =
       action === "tap"
-        ? `Tap ${label}`
+        ? t("mStepTapDesc", { label })
         : action === "input"
-          ? `Input value into ${label}`
+          ? t("mStepInputDesc", { label })
           : action === "assertNotVisible"
-            ? `Verify ${label} is not visible`
-            : `Verify ${label} is visible`
+            ? t("mStepAssertHiddenDesc", { label })
+            : t("mStepAssertVisibleDesc", { label })
 
     setError(null)
     setTestRun(null)
@@ -511,12 +735,25 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
     if (action === "input") setFlowInputValue("")
   }
 
+  const addScrollStep = (direction: "down" | "up") => {
+    setTestRun(null)
+    setRecordedFlowSteps((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        action: "scroll" as const,
+        value: direction,
+        description: direction === "down" ? t("mScrollDownDesc") : t("mScrollUpDesc")
+      }
+    ])
+  }
+
   const deleteRecordedFlowStep = (id: string) => {
     setTestRun(null)
     setRecordedFlowSteps((prev) => prev.filter((step) => step.id !== id))
   }
 
-  const buildMobileContext = () => [
+  const buildMobileContext = (mode: "ideas" | "prompt" | "generate" | "code" = "generate") => [
     "Target: mobile application testing.",
     selectedDevice
       ? `Device: ${selectedDevice.name} (${selectedDevice.platform ?? "android"} ${selectedDevice.type}, ${selectedDevice.id}, state: ${selectedDevice.state})`
@@ -554,7 +791,11 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       ? `Manual mobile interaction recording: before elements=${actionSummary.beforeElementCount}, after elements=${actionSummary.afterElementCount ?? "recording"}, before focus=${actionSummary.beforeFocusedWindow ?? actionSummary.focusedWindow ?? ""}, after focus=${actionSummary.afterFocusedWindow ?? ""}. New visible elements: ${(actionSummary.newElements ?? []).map((element) => element.label).join(", ")}`
       : null,
     "Automation plan: generate Appium/WebdriverIO or Maestro-style mobile tests. Prefer accessibility identifiers, Flutter Semantics identifiers, Android resource-id, iOS accessibility id, text/content-desc/name, and avoid raw coordinates unless no better locator exists.",
-    prompt.trim() ? `User goal:\n${prompt.trim()}` : "User goal: discover core app flows and propose QA ideas."
+    mode === "ideas"
+      ? "Execution source: use ONLY the listed Ideas payload as the test instructions. The prompt field is not part of this run."
+      : prompt.trim()
+        ? `User goal:\n${prompt.trim()}`
+        : "User goal: discover core app flows and propose QA ideas."
   ].filter(Boolean).join("\n\n")
 
   const handleGenerateIdeas = async () => {
@@ -566,9 +807,9 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       const settings = await getSettings()
       const provider = settings?.selectedModels.codeGenProvider ?? "openai"
       const model = settings?.selectedModels.codeGenModel ?? "gpt-4o-mini"
-      setIdeas(await generateTestIdeas({ context: buildMobileContext(), provider, model, lang }))
+      setIdeas(await generateTestIdeas({ context: buildMobileContext("generate"), provider, model, lang }))
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не вдалося згенерувати ідеї")
+      setError(err instanceof Error ? err.message : t("mErrGenerateIdeas"))
     } finally {
       setGenerating(false)
     }
@@ -582,7 +823,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       await setLastSessionKey(sessionKey)
       await updateSessionState({
         testIdeas: ideas,
-        customPrompt: buildMobileContext(),
+        customPrompt: buildMobileContext("code"),
         screenshotDataUrl: mobileScreenshot ?? undefined,
         mediaDescription: mobileScreenshot ? "Mobile app screenshot was captured for this QA session." : undefined,
         recordedActions: [],
@@ -591,7 +832,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       chrome.runtime.sendMessage({ type: "JACK_GENERATE_MOBILE_CODE", sessionKey }).catch(() => {})
       onOpenCode()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не вдалося запустити генерацію mobile tests")
+      setError(err instanceof Error ? err.message : t("mErrGenerateCode"))
     }
   }
 
@@ -602,7 +843,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
     if (!steps.length) {
       setTestProgress({
         phase: "error",
-        label: "No executable steps to run.",
+        label: t("mNoExecutableSteps"),
         total: 1,
         current: 0
       })
@@ -613,21 +854,21 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
     const total = Math.max(steps.length + 3, 3)
     setTestProgress({
       phase: "launching-app",
-      label: "Launching selected app and preparing automation...",
+      label: t("mProgressLaunching"),
       total,
       current: 1
     })
     window.setTimeout(() => {
       setTestProgress((prev) =>
         prev.phase === "launching-app"
-          ? { ...prev, phase: "reading-ui", label: "Reading mobile UI tree...", current: Math.min(prev.current + 1, prev.total) }
+          ? { ...prev, phase: "reading-ui", label: t("mProgressReadingUI"), current: Math.min(prev.current + 1, prev.total) }
           : prev
       )
     }, 900)
     window.setTimeout(() => {
       setTestProgress((prev) =>
         prev.phase === "reading-ui"
-          ? { ...prev, phase: "executing-steps", label: "Executing mobile steps...", current: Math.min(prev.current + 1, prev.total) }
+          ? { ...prev, phase: "executing-steps", label: t("mProgressExecuting"), current: Math.min(prev.current + 1, prev.total) }
           : prev
       )
     }, 2200)
@@ -643,7 +884,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       window.clearInterval(progressTimer)
       setTestProgress({
         phase: "collecting-report",
-        label: "Collecting final screenshot and report...",
+        label: t("mProgressCollecting"),
         total,
         current: Math.max(total - 1, 1)
       })
@@ -655,7 +896,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       setTestRun(result)
       setTestProgress({
         phase: "done",
-        label: "Test run complete",
+        label: t("mProgressDone"),
         total,
         current: total
       })
@@ -666,45 +907,64 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
 
   const handleRunMobileTests = async () => {
     if (!selectedDeviceId || !selectedPackage) return
+    const ideasToTest = ideas.map((idea) => ({ ...idea }))
+    if (!ideasToTest.length) return
     setTesting(true)
     setActiveRunMode("ideas")
     setError(null)
     setTestRun(null)
+    setMobileSteps([])
     setTestProgress({
       phase: "generating-steps",
-      label: "Generating executable steps from ideas...",
-      total: Math.max(ideas.length, 1),
+      label: t("mProgressGenerating"),
+      total: Math.max(ideasToTest.length, 1),
       current: 0
     })
     try {
       const settings = await getSettings()
       const provider = settings?.selectedModels.codeGenProvider ?? "openai"
       const model = settings?.selectedModels.codeGenModel ?? "gpt-4o-mini"
-      const steps = await generateMobileSteps({
-        ideas,
-        context: buildMobileContext(),
-        provider,
-        model,
-        lang
-      })
+      const generatedSteps: MobileExecutableStep[] = []
+      const context = buildMobileContext("ideas")
+      for (let index = 0; index < ideasToTest.length; index += 1) {
+        const idea = ideasToTest[index]
+        setTestProgress((prev) => ({
+          ...prev,
+          current: index,
+          label: `${t("mProgressGenerating")} ${index + 1}/${ideasToTest.length}`
+        }))
+        const stepsForIdea = await generateMobileSteps({
+          ideas: [idea],
+          context,
+          provider,
+          model,
+          lang
+        })
+        generatedSteps.push(
+          ...stepsForIdea.map((step, stepIndex) => ({
+            ...step,
+            id: step.id || `${idea.id}-step-${stepIndex + 1}`,
+            ideaId: idea.id
+          }))
+        )
+        setMobileSteps([...generatedSteps])
+      }
+      const steps = generatedSteps
       setMobileSteps(steps)
       if (!steps.length) {
         setTestProgress({
           phase: "error",
-          label: "No executable steps could be generated. Add exact visible text, accessibility id, or record/select elements.",
+          label: t("mProgressError"),
           total: 1,
           current: 0
         })
-        setError("Не вдалося сформувати executable steps. Додай точний текст кнопки/поля, accessibility id або вибери/запиши елементи app.")
+        setError(t("mErrNoSteps"))
         return
       }
-      await runExecutableSteps(
-        steps,
-        "Не вдалося сформувати executable steps. Додай точний текст кнопки/поля, accessibility id або вибери/запиши елементи app."
-      )
+      await runExecutableSteps(steps, t("mErrNoSteps"))
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не вдалося запустити mobile tests")
-      setTestProgress((prev) => ({ ...prev, phase: "error", label: "Test run failed" }))
+      setError(err instanceof Error ? err.message : t("mErrNoSteps"))
+      setTestProgress((prev) => ({ ...prev, phase: "error", label: t("mProgressError") }))
     } finally {
       setTesting(false)
       setActiveRunMode(null)
@@ -715,7 +975,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
     if (!selectedDeviceId || !selectedPackage) return
     const text = prompt.trim()
     if (!text) {
-      setError("Опиши flow у prompt, наприклад: перейти на реєстрацію, заповнити поля і натиснути Зареєструватись.")
+      setError(t("mErrNoPrompt"))
       return
     }
     const promptIdea: TestCaseIdea = { id: crypto.randomUUID(), text }
@@ -727,7 +987,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
     setMobileSteps([])
     setTestProgress({
       phase: "generating-steps",
-      label: "Converting prompt into executable mobile steps...",
+      label: t("mProgressGenerating"),
       total: 1,
       current: 0
     })
@@ -737,7 +997,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       const model = settings?.selectedModels.codeGenModel ?? "gpt-4o-mini"
       const steps = await generateMobileSteps({
         ideas: [promptIdea],
-        context: buildMobileContext(),
+        context: buildMobileContext("prompt"),
         provider,
         model,
         lang
@@ -745,20 +1005,17 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       if (!steps.length) {
         setTestProgress({
           phase: "error",
-          label: "No executable steps could be generated from prompt.",
+          label: t("mProgressError"),
           total: 1,
           current: 0
         })
-        setError("Не вдалося перетворити prompt у executable steps. Допоможе точний текст кнопок/полів або натисни “Вибрати елемент app”, щоб runner побачив UI tree.")
+        setError(t("mErrNoStepsPrompt"))
         return
       }
-      await runExecutableSteps(
-        steps,
-        "Не вдалося перетворити prompt у executable steps. Додай точний текст кнопок/полів або accessibility id."
-      )
+      await runExecutableSteps(steps, t("mErrNoStepsPrompt"))
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не вдалося запустити prompt flow")
-      setTestProgress((prev) => ({ ...prev, phase: "error", label: "Prompt flow failed" }))
+      setError(err instanceof Error ? err.message : t("mErrNoStepsPrompt"))
+      setTestProgress((prev) => ({ ...prev, phase: "error", label: t("mProgressError") }))
     } finally {
       setTesting(false)
       setActiveRunMode(null)
@@ -774,16 +1031,30 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
     try {
       await runExecutableSteps(
         recordedFlowSteps,
-        "Recorded flow порожній. Вибери елемент і додай tap/input/assert кроки."
+        t("mRecordedFlowEmpty")
       )
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не вдалося запустити recorded flow")
-      setTestProgress((prev) => ({ ...prev, phase: "error", label: "Recorded flow failed" }))
+      setError(err instanceof Error ? err.message : t("mProgressError"))
+      setTestProgress((prev) => ({ ...prev, phase: "error", label: t("mProgressError") }))
     } finally {
       setTesting(false)
       setActiveRunMode(null)
     }
   }
+
+  useEffect(() => {
+    if (!testing || !selectedDeviceId) return
+    const interval = window.setInterval(async () => {
+      try {
+        const shot = await captureMobileScreenshot(selectedDeviceId)
+        const compressed = await compressDataUrl(shot.dataUrl, 1200, 0.82).catch(() => shot.dataUrl)
+        setMobileScreenshot(compressed)
+      } catch {
+        // ignore poll errors during test execution
+      }
+    }, 2500)
+    return () => window.clearInterval(interval)
+  }, [testing, selectedDeviceId])
 
   const handleEditIdea = (id: string, text: string) => {
     setTestRun(null)
@@ -802,7 +1073,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
     setTestRun(null)
     setMobileSteps([])
     const text = newIdeaText.trim()
-    const idea: TestCaseIdea = { id: crypto.randomUUID(), text: text || "Нова mobile test idea" }
+    const idea: TestCaseIdea = { id: crypto.randomUUID(), text: text || t("mNewIdeaDefault") }
     setIdeas((prev) => [...prev, idea])
     setNewIdeaText("")
     if (!text) setEditingIdeaId(idea.id)
@@ -810,46 +1081,24 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
 
   const handleDownloadReport = () => {
     if (!testRun) return
-    const lines = [
-      "# Mobile QA Report",
-      "",
-      `Device: ${selectedDevice?.name ?? selectedDeviceId}`,
-      `App: ${selectedApp?.label ?? selectedPackage} (${selectedPackage})`,
-      `Platform: ${testRun.platform}`,
-      `Duration: ${Math.round(testRun.durationMs / 100) / 10}s`,
-      "",
-      "## Summary",
-      "",
-      `- Passed: ${ideaSummary.passed}`,
-      `- Failed: ${ideaSummary.failed}`,
-      `- Needs support: ${ideaSummary.blocked}`,
-      "",
-      "## Ideas",
-      "",
-      ...ideas.map((idea, index) => `${index + 1}. ${idea.text}`),
-      "",
-      "## Runnable Steps",
-      "",
-      ...mobileSteps.map((step, index) =>
-        `${index + 1}. ${step.action}${step.target ? `: ${step.target}` : ""}${step.value ? ` = ${step.value}` : ""} — ${step.description}`
-      ),
-      "",
-      "## Results",
-      "",
-      ...testRun.results.flatMap((item) => [
-        `### ${item.status.toUpperCase()} — ${item.title}`,
-        "",
-        item.message,
-        item.evidence?.length ? `Evidence: ${item.evidence.join(", ")}` : "",
-        item.error ? `Error: ${item.error}` : "",
-        ""
-      ].filter(Boolean))
-    ]
-    const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" })
+    const html = buildHtmlReport({
+      lang,
+      title: t("mReportTitle"),
+      device: selectedDevice?.name ?? selectedDeviceId,
+      app: `${selectedApp?.label ?? selectedPackage} (${selectedPackage})`,
+      platform: testRun.platform,
+      duration: `${Math.round(testRun.durationMs / 100) / 10}s`,
+      summary: ideaSummary,
+      ideas,
+      steps: mobileSteps,
+      results: testRun.results,
+      t
+    })
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" })
     const url = URL.createObjectURL(blob)
     chrome.downloads.download({
       url,
-      filename: `mobile-qa-report-${Date.now()}.md`,
+      filename: `mobile-qa-report-${Date.now()}.html`,
       saveAs: true
     })
     window.setTimeout(() => URL.revokeObjectURL(url), 10000)
@@ -894,7 +1143,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
           </div>
           <span style={{ width: 1, height: 16, background: "var(--border)", flexShrink: 0 }} />
           <Smartphone size={15} style={{ color: "#f87171", flexShrink: 0 }} />
-          <span style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap" }}>Mobile testing</span>
+          <span style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap" }}>{t("mMobileTitle")}</span>
         </div>
         {onOpenSettings && (
           <button
@@ -916,18 +1165,18 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       <div className="jack-scroll" style={{ overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={panelStyle}>
           <div style={{ fontSize: 11, color: error ? "#f87171" : "#c2c2c2", lineHeight: 1.45 }}>
-            {statusText(health, error)}
+            {statusText(health, error, t)}
           </div>
         </div>
 
         <div style={panelStyle}>
-          <label style={{ display: "block", fontSize: 11, color: "#c2c2c2", marginBottom: 6 }}>Device</label>
+          <label style={{ display: "block", fontSize: 11, color: "#c2c2c2", marginBottom: 6 }}>{t("mDevice")}</label>
           <select
             value={selectedDeviceId}
             onChange={(event) => setSelectedDeviceId(event.target.value)}
             style={selectStyle}
             disabled={!devices.length}>
-            {!devices.length && <option value="">No connected devices</option>}
+            {!devices.length && <option value="">{t("mNoDevices")}</option>}
             {devices.map((device) => (
               <option key={device.id} value={device.id}>
                 {device.name} - {device.platform ?? "android"} {device.type} - {device.state}
@@ -938,24 +1187,26 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
 
         {(emulators.length > 0 || iosSimulators.length > 0) && (
           <div style={panelStyle}>
-            <div style={{ fontSize: 11, color: "#c2c2c2", marginBottom: 7 }}>Launch emulator / simulator</div>
+            <div style={{ fontSize: 11, color: "#c2c2c2", marginBottom: 7 }}>{t("mLaunchSim")}</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6, marginBottom: iosSimulators.length ? 7 : 0 }}>
               <select
                 value={selectedEmulatorName}
                 onChange={(event) => setSelectedEmulatorName(event.target.value)}
                 style={selectStyle}
                 disabled={!emulators.length || loading}>
-                {!emulators.length && <option value="">No Android emulators</option>}
+                {!emulators.length && <option value="">{t("mNoAndroidEmus")}</option>}
                 {emulators.map((emulator) => (
                   <option key={emulator.name} value={emulator.name}>{emulator.name}</option>
                 ))}
               </select>
               <Button
                 size="sm"
+                variant="secondary"
+                className="w-[96px]"
                 disabled={!selectedEmulatorName || loading}
                 onClick={() => handleStartEmulator(selectedEmulatorName)}>
                 <Rocket size={13} />
-                Android
+                {t("mBtnAndroid")}
               </Button>
             </div>
             {iosSimulators.length > 0 && (
@@ -973,6 +1224,8 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
                 </select>
                 <Button
                   size="sm"
+                  variant="secondary"
+                  className="w-[96px]"
                   disabled={
                     !selectedIosSimulatorId ||
                     loading ||
@@ -980,7 +1233,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
                   }
                   onClick={() => handleStartIosSimulator(selectedIosSimulatorId)}>
                   <Rocket size={13} />
-                  iOS
+                  {t("mBtnIos")}
                 </Button>
               </div>
             )}
@@ -988,14 +1241,14 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
         )}
 
         <div style={panelStyle}>
-          <label style={{ display: "block", fontSize: 11, color: "#c2c2c2", marginBottom: 6 }}>Application package</label>
+          <label style={{ display: "block", fontSize: 11, color: "#c2c2c2", marginBottom: 6 }}>{t("mAppPackage")}</label>
           <select
             value={selectedPackage}
             onChange={(event) => setSelectedPackage(event.target.value)}
             style={selectStyle}
             disabled={!apps.length || appsLoading}>
-            {appsLoading && <option value="">Loading apps...</option>}
-            {!appsLoading && !apps.length && <option value="">No user apps found</option>}
+            {appsLoading && <option value="">{t("mLoadingApps")}</option>}
+            {!appsLoading && !apps.length && <option value="">{t("mNoApps")}</option>}
             {!appsLoading &&
               apps.map((app) => (
                 <option key={app.packageName} value={app.packageName}>
@@ -1009,43 +1262,47 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
             disabled={!selectedDeviceId || !selectedPackage || loading}
             onClick={handleStartApp}>
             <Play size={13} />
-            Start selected app
+            {t("mStartApp")}
           </Button>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <ActionCard
-            icon={<CameraIcon className="w-9 h-9" />}
-            label="Скріншот app"
-            onClick={handleScreenshot}
-            disabled={!selectedDeviceId || loading}
-          />
-          <ActionCard
-            icon={<VideoIcon className="w-9 h-9" />}
-            label={screenRecording ? "Зупинити відео" : "Запис відео app"}
-            onClick={toggleScreenRecording}
-            danger={screenRecording}
-            disabled={!selectedDeviceId || loading}
-          />
-          <ActionCard
-            icon={<RecordActionsIcon className="w-9 h-9" />}
-            label={actionRecording ? "Стоп запис дій" : "Запис дій app"}
-            onClick={toggleActionRecording}
-            danger={actionRecording}
-            disabled={!selectedDeviceId || loading}
-          />
-          <ActionCard
-            icon={<CrosshairIcon className="w-9 h-9" />}
-            label="Вибрати елемент app"
-            onClick={handleSelectElement}
-            disabled={!selectedDeviceId || loading}
-          />
+        <div style={panelStyle}>
+          <div style={{ fontSize: 11, color: "#c2c2c2", marginBottom: 4 }}>{t("mContextTitle")}</div>
+          <div style={{ fontSize: 10, color: "#64748b", lineHeight: 1.45, marginBottom: 8 }}>{t("mContextHint")}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <ActionCard
+              icon={<CameraIcon className="w-9 h-9" />}
+              label={t("mAppScreenshot")}
+              onClick={handleScreenshot}
+              disabled={!selectedDeviceId || loading}
+            />
+            <ActionCard
+              icon={<CrosshairIcon className="w-9 h-9" />}
+              label={t("mSelectElement")}
+              onClick={handleSelectElement}
+              disabled={!selectedDeviceId || loading}
+            />
+            <ActionCard
+              icon={<RecordActionsIcon className="w-9 h-9" />}
+              label={actionRecording ? t("mActionsStop") : t("mActionsStart")}
+              onClick={toggleActionRecording}
+              danger={actionRecording}
+              disabled={!selectedDeviceId || loading}
+            />
+            <ActionCard
+              icon={<VideoIcon className="w-9 h-9" />}
+              label={screenRecording ? t("mVideoStop") : t("mVideoStart")}
+              onClick={toggleScreenRecording}
+              danger={screenRecording}
+              disabled={!selectedDeviceId || loading}
+            />
+          </div>
         </div>
 
         {(mobileScreenshot || mobileVideoUrl || actionSummary) && (
           <div style={panelStyle}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-              <span style={{ fontSize: 11, color: "#c2c2c2" }}>Mobile capture context</span>
+              <span style={{ fontSize: 11, color: "#c2c2c2" }}>{t("mContextTitle")}</span>
               <button
                 onClick={() => {
                   setMobileScreenshot(null)
@@ -1058,20 +1315,37 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
               </button>
             </div>
             {mobileScreenshot && (
-              <img
-                src={mobileScreenshot}
-                alt="Mobile screenshot"
-                style={{
-                  width: "100%",
-                  maxHeight: 220,
-                  objectFit: "contain",
-                  borderRadius: 7,
-                  border: "1px solid var(--border)",
-                  background: "#000",
-                  display: "block",
-                  marginBottom: mobileVideoUrl || actionSummary ? 8 : 0
-                }}
-              />
+              <div style={{ position: "relative", marginBottom: mobileVideoUrl || actionSummary ? 8 : 0 }}>
+                <img
+                  src={mobileScreenshot}
+                  alt="Mobile screenshot"
+                  style={{
+                    width: "100%",
+                    maxHeight: 220,
+                    objectFit: "contain",
+                    borderRadius: 7,
+                    border: "1px solid var(--border)",
+                    background: "#000",
+                    display: "block"
+                  }}
+                />
+                {testing && (
+                  <div style={{
+                    position: "absolute",
+                    top: 6,
+                    right: 6,
+                    background: "#ef4444",
+                    color: "#fff",
+                    fontSize: 9,
+                    fontWeight: 700,
+                    borderRadius: 4,
+                    padding: "2px 5px",
+                    letterSpacing: "0.05em"
+                  }}>
+                    {t("mLive")}
+                  </div>
+                )}
+              </div>
             )}
             {mobileVideoUrl && (
               <video
@@ -1090,10 +1364,10 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
             )}
             {actionSummary && (
               <div style={{ color: "#c2c2c2", fontSize: 11, lineHeight: 1.45 }}>
-                <div>Before elements: {actionSummary.beforeElementCount}</div>
-                {actionSummary.afterElementCount !== undefined && <div>After elements: {actionSummary.afterElementCount}</div>}
+                <div>{t("mBeforeElements", { n: actionSummary.beforeElementCount })}</div>
+                {actionSummary.afterElementCount !== undefined && <div>{t("mAfterElements", { n: actionSummary.afterElementCount })}</div>}
                 {(actionSummary.afterFocusedWindow || actionSummary.focusedWindow) && (
-                  <div style={{ wordBreak: "break-word" }}>Focus: {actionSummary.afterFocusedWindow ?? actionSummary.focusedWindow}</div>
+                  <div style={{ wordBreak: "break-word" }}>{t("mFocusWindow", { w: String(actionSummary.afterFocusedWindow ?? actionSummary.focusedWindow ?? "") })}</div>
                 )}
               </div>
             )}
@@ -1103,7 +1377,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
         {elements.length > 0 && (
           <div style={panelStyle}>
             <label style={{ display: "block", fontSize: 11, color: "#c2c2c2", marginBottom: 6 }}>
-              Selected element {focusedWindow ? `- ${focusedWindow}` : ""}
+              {t("mElementLabel")}{focusedWindow ? ` — ${focusedWindow}` : ""}
             </label>
             <select
               value={selectedElementId}
@@ -1111,16 +1385,16 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
               style={selectStyle}>
               {elements.slice(0, 80).map((element) => (
                 <option key={element.id} value={element.id}>
-                  {element.label.slice(0, 80)} {element.clickable ? "- clickable" : ""}
+                  {element.label.slice(0, 80)} {element.clickable ? `- ${t("mClickable")}` : ""}
                 </option>
               ))}
             </select>
             {selectedElement && (
               <div style={{ color: "#c2c2c2", fontSize: 11, lineHeight: 1.45, marginTop: 7, wordBreak: "break-word" }}>
                 <div>{selectedElement.className}</div>
-                {selectedElement.resourceId && <div>id: {selectedElement.resourceId}</div>}
-                {selectedElement.contentDesc && <div>desc: {selectedElement.contentDesc}</div>}
-                <div>bounds: {selectedElement.bounds.raw}</div>
+                {selectedElement.resourceId && <div>{t("mElementId")}: {selectedElement.resourceId}</div>}
+                {selectedElement.contentDesc && <div>{t("mElementDesc")}: {selectedElement.contentDesc}</div>}
+                <div>{t("mElementBounds")}: {selectedElement.bounds.raw}</div>
               </div>
             )}
             <Button
@@ -1129,7 +1403,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
               disabled={!selectedElement || loading}
               onClick={handleTapSelectedElement}>
               <Play size={13} />
-              Tap selected element
+              {t("mTapElement")}
             </Button>
             <div
               style={{
@@ -1137,13 +1411,16 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
                 paddingTop: 9,
                 borderTop: "1px solid var(--border)"
               }}>
-              <div style={{ fontSize: 11, color: "#c2c2c2", marginBottom: 6 }}>
-                Recorded flow builder
+              <div style={{ fontSize: 11, color: "#c2c2c2", marginBottom: 3 }}>
+                {t("mFlowBuilderTitle")}
+              </div>
+              <div style={{ fontSize: 10, color: "#64748b", lineHeight: 1.4, marginBottom: 7 }}>
+                {t("mFlowBuilderHint")}
               </div>
               <input
                 value={flowInputValue}
                 onChange={(event) => setFlowInputValue(event.target.value)}
-                placeholder="Value for input step..."
+                placeholder={t("mInputValue")}
                 style={{
                   width: "100%",
                   minWidth: 0,
@@ -1163,28 +1440,42 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
                   disabled={!selectedElement || loading}
                   onClick={() => addRecordedFlowStep("tap")}>
                   <Plus size={13} />
-                  Add tap
+                  {t("mAddTap")}
                 </Button>
                 <Button
                   size="sm"
                   disabled={!selectedElement || !flowInputValue.trim() || loading}
                   onClick={() => addRecordedFlowStep("input")}>
                   <Plus size={13} />
-                  Add input
+                  {t("mAddInput")}
                 </Button>
                 <Button
                   size="sm"
                   disabled={!selectedElement || loading}
                   onClick={() => addRecordedFlowStep("assertVisible")}>
                   <Plus size={13} />
-                  Assert visible
+                  {t("mAssertVisible")}
                 </Button>
                 <Button
                   size="sm"
                   disabled={!selectedElement || loading}
                   onClick={() => addRecordedFlowStep("assertNotVisible")}>
                   <Plus size={13} />
-                  Assert hidden
+                  {t("mAssertHidden")}
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={!selectedDeviceId || loading}
+                  onClick={() => addScrollStep("down")}>
+                  <Plus size={13} />
+                  {t("mScrollDown")}
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={!selectedDeviceId || loading}
+                  onClick={() => addScrollStep("up")}>
+                  <Plus size={13} />
+                  {t("mScrollUp")}
                 </Button>
               </div>
             </div>
@@ -1193,7 +1484,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
 
         <div style={panelStyle}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
-            <span style={{ fontSize: 11, color: "#c2c2c2" }}>Recorded flow</span>
+            <span style={{ fontSize: 11, color: "#c2c2c2" }}>{t("mRecordedFlowTitle")}</span>
             {recordedFlowSteps.length > 0 && (
               <button
                 onClick={() => {
@@ -1208,7 +1499,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
           </div>
           {recordedFlowSteps.length === 0 && (
             <div style={{ color: "#64748b", fontSize: 12, lineHeight: 1.45, marginBottom: 8 }}>
-              Натисни “Вибрати елемент app”, вибери поле або кнопку і додай tap/input/assert кроки. Цей flow можна буде повторно прогнати в app.
+              {t("mRecordedFlowEmpty")}
             </div>
           )}
           {recordedFlowSteps.length > 0 && (
@@ -1227,7 +1518,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
                   }}>
                   <span style={{ color: "#f87171", fontSize: 10, fontWeight: 700, minWidth: 16 }}>{index + 1}</span>
                   <div style={{ minWidth: 0, flex: 1, color: "#9ca3af", fontSize: 10, lineHeight: 1.35, wordBreak: "break-word" }}>
-                    <span style={{ color: "#d1d5db", fontWeight: 600 }}>{step.action}</span>
+                    <span style={{ color: "#d1d5db", fontWeight: 600 }}>{stepActionLabel(step.action, t)}</span>
                     {step.target ? ` → ${step.target}` : ""}
                     {step.value ? ` = ${step.value}` : ""}
                     <div style={{ color: "#64748b", marginTop: 2 }}>{step.description}</div>
@@ -1249,16 +1540,16 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
             loading={testing && activeRunMode === "recorded"}
             onClick={handleRunRecordedFlow}>
             <Play size={13} />
-            Run recorded flow
+            {t("mRunRecordedFlow")}
           </Button>
         </div>
 
         <div style={panelStyle}>
-          <label style={{ display: "block", fontSize: 11, color: "#c2c2c2", marginBottom: 6 }}>Prompt для flow / ідей</label>
+          <label style={{ display: "block", fontSize: 11, color: "#c2c2c2", marginBottom: 6 }}>{t("mPromptLabel")}</label>
           <VoiceInput
             value={prompt}
             onChange={setPrompt}
-            placeholder="Наприклад: перейти на реєстрацію, заповнити поля, натиснути Зареєструватись..."
+            placeholder={t("mPromptPlaceholder")}
           />
           <Button
             className="mt-2 w-full"
@@ -1266,23 +1557,37 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
             loading={testing && activeRunMode === "prompt"}
             onClick={handleRunPromptFlow}>
             <Play size={13} />
-            Run prompt as flow
+            {t("mRunPrompt")}
           </Button>
+          {prompt.trim() && elements.length === 0 && !testing && (
+            <div style={{
+              marginTop: 6,
+              padding: "6px 9px",
+              borderRadius: 7,
+              background: "#1c1917",
+              border: "1px solid #78350f",
+              color: "#fbbf24",
+              fontSize: 10,
+              lineHeight: 1.4
+            }}>
+              {t("mHintSelectBeforePrompt")}
+            </div>
+          )}
           <Button
             className="mt-2 w-full"
             disabled={generating}
             loading={generating}
             onClick={handleGenerateIdeas}>
             <Zap size={13} />
-            Generate mobile test ideas
+            {t("mGenerateIdeas")}
           </Button>
         </div>
 
         <div style={panelStyle}>
-          <div style={{ fontSize: 11, color: "#c2c2c2", marginBottom: 8 }}>Ideas that will be tested</div>
+          <div style={{ fontSize: 11, color: "#c2c2c2", marginBottom: 8 }}>{t("mIdeasTitle")}</div>
           {ideas.length === 0 && (
             <div style={{ color: "#64748b", fontSize: 12, lineHeight: 1.45, marginBottom: 8 }}>
-              Згенеруй ідеї з prompt або додай свої вручну.
+              {t("mIdeasEmpty")}
             </div>
           )}
           {ideas.length > 0 && (
@@ -1349,7 +1654,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
                 value={newIdeaText}
                 onChange={(event) => setNewIdeaText(event.target.value)}
                 rows={2}
-                placeholder="Додати свою ідею для тесту..."
+                placeholder={t("mAddIdeaHint")}
                 style={{
                   width: "100%",
                   minWidth: 0,
@@ -1373,7 +1678,23 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
             </div>
             {mobileSteps.length > 0 && (
               <div style={{ marginTop: 8 }}>
-                <div style={{ fontSize: 10, color: "#64748b", marginBottom: 5 }}>Runnable steps</div>
+                <div style={{ fontSize: 10, color: "#64748b", marginBottom: 5 }}>{t("mRunnableSteps")}</div>
+                {ideas.length > 0 && (
+                  <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 5 }}>
+                    {t("mRunnableCoverage", {
+                      done: runnableIdeaCoverage.covered,
+                      total: runnableIdeaCoverage.total
+                    })}
+                    {runnableIdeaCoverage.covered < runnableIdeaCoverage.total && (
+                      <span style={{ color: "#fbbf24" }}>
+                        {" "}
+                        {t("mRunnableNeedsSupport", {
+                          n: runnableIdeaCoverage.total - runnableIdeaCoverage.covered
+                        })}
+                      </span>
+                    )}
+                  </div>
+                )}
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   {mobileSteps.slice(0, 12).map((step, index) => (
                     <div
@@ -1387,13 +1708,27 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
                         lineHeight: 1.35,
                         padding: "5px 7px"
                       }}>
-                      <span style={{ color: "#f87171", fontWeight: 700 }}>{index + 1}. {step.action}</span>
+                      <span style={{ color: "#f87171", fontWeight: 700 }}>{index + 1}. {stepActionLabel(step.action, t)}</span>
                       {step.target ? ` → ${step.target}` : ""}
                       {step.value ? ` = ${step.value}` : ""}
                       <div style={{ color: "#64748b", marginTop: 2 }}>{step.description}</div>
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+            {ideas.length > 0 && elements.length === 0 && !testing && (
+              <div style={{
+                marginTop: 8,
+                padding: "7px 9px",
+                borderRadius: 7,
+                background: "#1c1917",
+                border: "1px solid #78350f",
+                color: "#fbbf24",
+                fontSize: 11,
+                lineHeight: 1.45
+              }}>
+                {t("mHintSelectBeforeIdeas")}
               </div>
             )}
             <Button
@@ -1403,7 +1738,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
               loading={testing && activeRunMode === "ideas"}
               onClick={handleRunMobileTests}>
               <Play size={13} />
-              Test these ideas
+              {t("mRunIdeas")}
             </Button>
             {(testing || testProgress.phase === "done" || testProgress.phase === "error") && testProgress.phase !== "idle" && (
               <div
@@ -1437,7 +1772,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
                         <div key={step.id} style={{ display: "flex", gap: 6, color: "#9ca3af", fontSize: 10, lineHeight: 1.35 }}>
                           <span style={{ color: progressStatusColor(status) }}>●</span>
                           <span style={{ color: status === "running" ? "#d1d5db" : "#9ca3af" }}>
-                            {status === "running" ? "Running" : status === "done" ? "Done" : "Queued"}: {step.description}
+                            {status === "running" ? "▶" : status === "done" ? "✓" : "○"} {step.description}
                           </span>
                         </div>
                       )
@@ -1452,29 +1787,29 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
               disabled={!ideas.length}
               onClick={handleGenerateTests}>
               <Zap size={13} />
-              Generate mobile test code
+              {t("mGenerateCode")}
             </Button>
           </div>
 
         {testRun && (
           <div style={panelStyle}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 11, color: "#c2c2c2" }}>Results for these ideas</span>
+              <span style={{ fontSize: 11, color: "#c2c2c2" }}>{t("mResultsTitle")}</span>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontSize: 11, color: "#c2c2c2" }}>{Math.round(testRun.durationMs / 100) / 10}s</span>
                 <button
                   onClick={handleDownloadReport}
                   style={{ color: "#f87171", fontSize: 11, fontWeight: 600 }}
                   className="hover:opacity-80 transition-opacity">
-                  Report
+                  {t("mReportBtn")}
                 </button>
               </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginBottom: 8 }}>
               {[
-                ["Passed", ideaSummary.passed, "#22c55e"],
-                ["Failed", ideaSummary.failed, "#ef4444"],
-                ["Needs support", ideaSummary.blocked, "#f59e0b"]
+                [t("mPassed"), ideaSummary.passed, "#22c55e"],
+                [t("mFailed"), ideaSummary.failed, "#ef4444"],
+                [t("mNeedsSupport"), ideaSummary.blocked, "#f59e0b"]
               ].map(([label, count, color]) => (
                 <div
                   key={label}
@@ -1491,7 +1826,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
             </div>
             {ideaSummary.blocked > 0 && (
               <div style={{ color: "#f59e0b", fontSize: 11, lineHeight: 1.4, marginBottom: 8 }}>
-                Needs support означає: runner не знайшов потрібний target або ідея ще не має достатньо конкретних executable steps. Допомагає recorded flow, точний visible text/accessibility id або стабільний selector.
+                {t("mNeedsSupportHint")}
               </div>
             )}
             {ideaResults.length > 0 && (
@@ -1517,9 +1852,9 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
                         }}
                       />
                       <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={{ color: "#d1d5db", fontSize: 12, lineHeight: 1.35 }}>{item.title}</div>
+                        <div style={{ color: "#d1d5db", fontSize: 12, lineHeight: 1.35 }}>{resultTitleLabel(item.id, item.title, t)}</div>
                         <div style={{ color: "#9ca3af", fontSize: 11, lineHeight: 1.35, marginTop: 3 }}>
-                          {testStatusLabel(item.status)}: {item.message}
+                          {testStatusLabel(item.status, t)}: {resultMessageLabel(item.message, t)}
                         </div>
                         {item.error && (
                           <div style={{ color: "#f87171", fontSize: 10, lineHeight: 1.35, marginTop: 3, wordBreak: "break-word" }}>
@@ -1528,7 +1863,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
                         )}
                         {item.evidence?.length > 0 && (
                           <div style={{ color: "#64748b", fontSize: 10, lineHeight: 1.35, marginTop: 4, wordBreak: "break-word" }}>
-                            Evidence: {item.evidence.slice(0, 3).join(", ")}
+                            {t("mEvidence")}: {item.evidence.slice(0, 3).join(", ")}
                           </div>
                         )}
                       </div>
@@ -1539,11 +1874,11 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
             )}
             {setupResults.length > 0 && (
               <div>
-                <div style={{ fontSize: 10, color: "#64748b", marginBottom: 5 }}>Setup checks</div>
+                <div style={{ fontSize: 10, color: "#64748b", marginBottom: 5 }}>{t("mSetupChecks")}</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   {setupResults.map((item) => (
                     <div key={item.id} style={{ color: "#9ca3af", fontSize: 10, lineHeight: 1.35 }}>
-                      <span style={{ color: testStatusColor(item.status) }}>●</span> {item.title}: {item.message}
+                      <span style={{ color: testStatusColor(item.status) }}>●</span> {resultTitleLabel(item.id, item.title, t)}: {resultMessageLabel(item.message, t)}
                     </div>
                   ))}
                 </div>

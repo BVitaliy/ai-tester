@@ -241,7 +241,7 @@ export function ProviderKeysSettings({ onBack, onLangChange }: Props) {
           className="hover:opacity-100 transition-opacity">
           <ChevronLeft size={18} />
         </button>
-        <span style={{ fontWeight: 600, fontSize: 14 }}>Настройки</span>
+        <span style={{ fontWeight: 600, fontSize: 14 }}>{t("settingsTitle")}</span>
       </div>
 
       {/* Scrollable content */}
@@ -323,14 +323,14 @@ export function ProviderKeysSettings({ onBack, onLangChange }: Props) {
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0, minWidth: 36 }}>
                       <CheckCircle size={13} style={{ color: "#22c55e" }} />
                       <span style={{ fontSize: 8, color: "#22c55e", whiteSpace: "nowrap" }}>
-                        {isLive(p.id) ? `${fetchedModels[p.id]!.length} моделей` : "✓"}
+                        {isLive(p.id) ? t("modelsLive", { n: fetchedModels[p.id]!.length }) : "✓"}
                       </span>
                     </div>
                   )}
                   {vs === "fail" && <XCircle size={14} style={{ color: "#ef4444", flexShrink: 0 }} />}
                   {vs === "idle" && (
                     <span style={{ width: 36, fontSize: 8, color: "#475569", flexShrink: 0, whiteSpace: "nowrap" }}>
-                      {hasKey(p.id) && !isLive(p.id) ? "→ Тест" : ""}
+                      {hasKey(p.id) && !isLive(p.id) ? t("tapTestHint") : ""}
                     </span>
                   )}
                 </div>
@@ -364,7 +364,7 @@ export function ProviderKeysSettings({ onBack, onLangChange }: Props) {
                       <span style={{ fontSize: 10, color: "#94a3b8" }}>{label}</span>
                       {isFetched && (
                         <span style={{ fontSize: 9, color: "#22c55e", opacity: 0.8 }}>
-                          live
+                          {t("live")}
                         </span>
                       )}
                     </div>
@@ -417,14 +417,14 @@ export function ProviderKeysSettings({ onBack, onLangChange }: Props) {
           {sectionTitle(t("targetStackSection"))}
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <div>
-              <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 5 }}>Фреймворк</div>
+              <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 5 }}>{t("frameworkLabel")}</div>
               <div style={{ display: "flex", gap: 6 }}>
                 {chip(framework === "playwright", () => setFramework("playwright"), "Playwright")}
                 {chip(framework === "cypress", () => setFramework("cypress"), "Cypress")}
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 5 }}>Язык</div>
+              <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 5 }}>{t("codeLanguageLabel")}</div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {chip(language === "typescript", () => setLanguage("typescript"), "TypeScript")}
                 {chip(language === "javascript", () => setLanguage("javascript"), "JavaScript")}
@@ -457,7 +457,7 @@ export function ProviderKeysSettings({ onBack, onLangChange }: Props) {
             color: "#94a3b8",
             cursor: "pointer",
           }}>
-          Назад
+          {t("back")}
         </button>
         <button
           onClick={handleSave}

@@ -240,13 +240,13 @@ export function CodeScreen({ onBack }: Props) {
             <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 10, color: "#f87171", overflow: "hidden" }}>
               <Loader2 size={10} className="animate-spin" style={{ flexShrink: 0 }} />
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {genStatus.phase === "generating-code" ? "Генерація..." : "Обробка..."}
+                {genStatus.phase === "generating-code" ? t("genGeneratingCode") : t("genProcessing")}
               </span>
             </span>
           )}
           {genStatus.phase === "error" && (
             <button onClick={handleRetry} style={{ fontSize: 10, color: "#f87171", background: "rgba(220,38,38,0.2)", border: "none", borderRadius: 3, padding: "2px 7px", cursor: "pointer", whiteSpace: "nowrap" }}>
-              ✕ Повторити
+              ✕ {t("retry")}
             </button>
           )}
         </div>
@@ -271,10 +271,10 @@ export function CodeScreen({ onBack }: Props) {
         {/* Explorer — 160px, collapsible */}
         <div style={{ width: explorerOpen ? 160 : 0, minWidth: 0, background: "#252526", borderRight: explorerOpen ? "1px solid #1a1a1a" : "none", display: "flex", flexDirection: "column", flexShrink: 0, overflow: "hidden", transition: "width 0.18s ease" }}>
           <div style={{ padding: "7px 10px 4px", fontSize: 9, fontWeight: 700, color: "#6b7280", letterSpacing: "0.1em", textTransform: "uppercase", userSelect: "none", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span>EXPLORER</span>
+            <span>{t("explorer")}</span>
             <button
               onClick={() => setExplorerOpen(false)}
-              title="Сховати"
+              title={t("hideExplorer")}
               style={{ color: "#6b7280", background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", lineHeight: 1 }}>
               <PanelLeftClose size={13} />
             </button>
@@ -313,7 +313,7 @@ export function CodeScreen({ onBack }: Props) {
             {!explorerOpen && (
               <button
                 onClick={() => setExplorerOpen(true)}
-                title="Показати дерево"
+                title={t("showExplorer")}
                 style={{ display: "flex", alignItems: "center", padding: "0 8px", background: "none", border: "none", borderRight: "1px solid #3e3e3e", cursor: "pointer", color: "#6b7280", flexShrink: 0 }}>
                 <PanelLeftOpen size={13} />
               </button>

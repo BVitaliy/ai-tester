@@ -375,7 +375,7 @@ function MainPanel({ onOpenSettings, onOpenIdeas, onOpenCode, onOpenMobile }: { 
         }}
       >
         <Smartphone size={15} style={{ color: "#f87171" }} />
-        Mobile app testing
+        {t("mMobileTitle")}
       </button>
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         <label style={{ fontSize: 11, fontWeight: 500, color: "#c2c2c2" }}>{t("promptLabel")}</label>
@@ -505,20 +505,20 @@ function MainPanel({ onOpenSettings, onOpenIdeas, onOpenCode, onOpenMobile }: { 
               <path d="M21 12a9 9 0 1 1-6.219-8.56" />
             </svg>
             <span style={{ fontSize: 11 }}>
-              {genStatus.phase === "analyzing-media" && "Аналіз медіа..."}
-              {genStatus.phase === "generating-ideas" && "Генерація ідей..."}
-              {genStatus.phase === "generating-code" && "Генерація коду..."}
+              {genStatus.phase === "analyzing-media" && t("genAnalyzingMedia")}
+              {genStatus.phase === "generating-ideas" && t("genGeneratingIdeas")}
+              {genStatus.phase === "generating-code" && t("genGeneratingCode")}
             </span>
           </p>
         )}
         {genStatus.phase === "error" && (
           <p className="flex items-center gap-1 flex-wrap" style={{ color: "#e70000", fontSize: 11 }}>
-            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>✕ {genStatus.error ?? "Помилка генерації"}</span>
+            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>✕ {genStatus.error ?? t("generationError")}</span>
             <button
               onClick={() => chrome.runtime.sendMessage({ type: "JACK_RETRY", sessionKey: genStatus.sessionKey, failedPhase: genStatus.failedPhase }).catch(() => {})}
               style={{ color: "#e70000", background: "none", border: "none", cursor: "pointer", fontSize: 11, padding: 0, flexShrink: 0 }}
             >
-              Повторити →
+              {t("retry")} →
             </button>
           </p>
         )}
@@ -529,7 +529,7 @@ function MainPanel({ onOpenSettings, onOpenIdeas, onOpenCode, onOpenMobile }: { 
         )}
         {session && session.generatedFiles.length > 0 && (
           <button onClick={onOpenCode} className="flex items-center gap-1 transition-colors w-full text-left" style={{ color: "#e70000" }}>
-            <VideoIcon className="w-3 h-3" /> Код ({session.generatedFiles.length} файлов) →
+            <VideoIcon className="w-3 h-3" /> {t("codeLink", { n: session.generatedFiles.length })}
           </button>
         )}
       </div>

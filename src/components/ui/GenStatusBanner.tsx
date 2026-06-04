@@ -2,12 +2,7 @@ import React from "react"
 import { RefreshCw, AlertCircle } from "lucide-react"
 import type { JackGenStatus } from "../../core/types"
 import { cn } from "../../lib/cn"
-
-const PHASE_LABELS: Partial<Record<string, string>> = {
-  "analyzing-media": "Аналіз медіа...",
-  "generating-ideas": "Генерація ідей...",
-  "generating-code": "Генерація коду...",
-}
+import { useLanguage } from "../../contexts/LanguageContext"
 
 interface Props {
   status: JackGenStatus
@@ -16,7 +11,17 @@ interface Props {
 }
 
 export function GenStatusBanner({ status, onRetry, className }: Props) {
+  const { t } = useLanguage()
   if (status.phase === "idle") return null
+
+  const phaseLabel =
+    status.phase === "analyzing-media"
+      ? t("genAnalyzingMedia")
+      : status.phase === "generating-ideas"
+        ? t("genGeneratingIdeas")
+        : status.phase === "generating-code"
+          ? t("genGeneratingCode")
+          : t("genProcessing")
 
   if (status.phase === "error") {
     return (
@@ -28,7 +33,7 @@ export function GenStatusBanner({ status, onRetry, className }: Props) {
         }}>
         <AlertCircle size={13} style={{ color: "#f87171", flexShrink: 0, marginTop: 1 }} />
         <span style={{ fontSize: 11, color: "#fca5a5", flex: 1, lineHeight: 1.5 }}>
-          {status.error ?? "Помилка генерації"}
+          {status.error ?? t("generationError")}
         </span>
         {onRetry && (
           <button
@@ -44,7 +49,7 @@ export function GenStatusBanner({ status, onRetry, className }: Props) {
               flexShrink: 0,
               fontWeight: 600,
             }}>
-            Повторити
+            {t("retry")}
           </button>
         )}
       </div>
@@ -60,7 +65,7 @@ export function GenStatusBanner({ status, onRetry, className }: Props) {
       }}>
       <RefreshCw size={12} className="animate-spin" style={{ color: "#f87171", flexShrink: 0 }} />
       <span style={{ fontSize: 11, color: "#f87171" }}>
-        {PHASE_LABELS[status.phase] ?? "Обробка..."}
+        {phaseLabel}
       </span>
     </div>
   )

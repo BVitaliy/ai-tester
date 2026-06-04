@@ -269,14 +269,14 @@ export function IdeasScreen({ onBack, onOpenCode }: Props) {
               <button
                 onClick={() => handleRegenerate(idea.id)}
                 disabled={regeneratingId === idea.id}
-                title="Уточнити через AI"
+                title={t("refineWithAi")}
                 style={{ color: "#f87171", opacity: regeneratingId === idea.id ? 0.4 : 0.7 }}
                 className="hover:opacity-100 transition-opacity">
                 <RefreshCw size={13} className={cn(regeneratingId === idea.id && "animate-spin")} />
               </button>
               <button
                 onClick={() => handleDelete(idea.id)}
-                title="Видалити"
+                title={t("delete")}
                 style={{ color: "#f87171", opacity: 0.6 }}
                 className="hover:opacity-100 transition-opacity">
                 <Trash2 size={13} />
@@ -303,7 +303,7 @@ export function IdeasScreen({ onBack, onOpenCode }: Props) {
           />
           <button
             onClick={handleAdd}
-            title="Додати ідею"
+            title={t("addIdea")}
             style={{
               background: "rgba(220,38,38,0.15)",
               border: "1px solid rgba(220,38,38,0.3)",

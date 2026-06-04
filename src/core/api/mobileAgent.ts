@@ -90,7 +90,7 @@ export interface MobileActionRecordingResult {
 
 export type MobileTestStatus = "passed" | "failed" | "blocked"
 
-export type MobileStepAction = "tap" | "input" | "assertVisible" | "assertNotVisible" | "wait"
+export type MobileStepAction = "tap" | "input" | "assertVisible" | "assertNotVisible" | "wait" | "scroll"
 
 export interface MobileExecutableStep {
   id: string
@@ -109,6 +109,8 @@ export interface MobileTestResultItem {
   message: string
   evidence: string[]
   error?: string
+  screenshotDataUrl?: string | null
+  screenshotError?: string
 }
 
 export interface MobileTestRunResult {

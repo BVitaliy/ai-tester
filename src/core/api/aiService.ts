@@ -200,7 +200,7 @@ function parseFiles(raw: string): GeneratedFile[] {
   return []
 }
 
-type MobileStepAction = "tap" | "input" | "assertVisible" | "assertNotVisible" | "wait"
+type MobileStepAction = "tap" | "input" | "assertVisible" | "assertNotVisible" | "wait" | "scroll"
 
 export interface GeneratedMobileStep {
   id: string
@@ -215,7 +215,7 @@ export interface GeneratedMobileStep {
 function parseMobileSteps(raw: string): GeneratedMobileStep[] {
   const parsed = extractJson(raw)
   if (!Array.isArray(parsed)) return []
-  const allowed = new Set(["tap", "input", "assertVisible", "assertNotVisible", "wait"])
+  const allowed = new Set(["tap", "input", "assertVisible", "assertNotVisible", "wait", "scroll"])
   const invalidTargets = new Set([
     "test",
     "check",
@@ -237,9 +237,15 @@ function parseMobileSteps(raw: string): GeneratedMobileStep[] {
   return parsed
     .filter((step: any) => allowed.has(step?.action) && typeof step?.description === "string")
     .filter((step: any) => {
-      if (step.action === "wait") return true
+      if (step.action === "wait" || step.action === "scroll") return true
       if (typeof step.target !== "string" || !step.target.trim()) return false
-      return !invalidTargets.has(step.target.trim().toLowerCase())
+      const target = step.target.trim()
+      if (invalidTargets.has(target.toLowerCase())) return false
+      // Reject targets that are sentences, not element identifiers
+      if (target.length > 55) return false
+      if (target.split(/\s+/).length > 6) return false
+      if (/^(на будь|будь-який|будь який|будь |після |коли |якщо |де |що ж|як |перевіри|перевірит|any |some |every |all |each |check |verify |make sure)/i.test(target)) return false
+      return true
     })
     .map((step: any, index) => ({
       id: typeof step.id === "string" && step.id ? step.id : `step-${index + 1}`,
@@ -801,22 +807,25 @@ Allowed actions:
 - tap: tap a visible element
 - input: tap a text field and type value
 - wait: wait for timeoutMs
+- scroll: scroll the screen (value: "down" or "up", no target needed; use when elements may be below the fold)
 
 Rules:
+- The Ideas payload is the source of truth. Convert ONLY those listed ideas into executable steps.
+- Do not add extra flows, assertions, success-screen checks, or navigation steps unless the listed idea explicitly asks for them.
+- Keep each generated step linked to the matching ideaId from the Ideas payload.
 - Every step must have: id, ideaId, action, description.
 - target is required for assertVisible, assertNotVisible, tap, input.
 - value is required for input.
 - timeoutMs is optional; use it for waits and timed assertions.
-- Prefer exact visible text, accessibility id, Flutter Semantics label, Android resource-id, iOS name/label.
-- Never use generic instruction words as target: "треба", "перевірити", "форма", "кнопка", "field", "button", "screen".
+- target MUST be a SHORT concrete identifier (1–5 words max): exact button label, field placeholder, accessibility id, resource-id, or visible text from context. NEVER put a full sentence or phrase like "будь-який елемент після скролу" as target.
+- If an idea tests abstract behavior (accessibility labels, scroll physics, visual overlaps) with NO concrete named element visible in context — return NO step for that idea rather than a vague or wrong step.
+- Never use generic instruction words as target: "треба", "перевірити", "форма", "кнопка", "field", "button", "screen", "any element", "будь-який".
 - If an idea describes a user flow, decompose it into ordered executable steps.
 - If the flow starts from the home screen and says to open login while the user is not logged in, first tap the visible user/profile/account/login icon or accessibility id.
 - If the next instruction says to open registration from login, tap the visible register/sign-up/create-account link.
 - For navigation steps, use tap with the exact visible label from context when possible.
 - For form filling, use input with the visible field label/placeholder/accessibility id as target and realistic safe test values.
 - After a tap that changes screens, add a short wait step before the next assertion/input when useful.
-- If you cannot identify a concrete target from the idea/context, return no step for that idea.
-- Do not invent long flows if the idea lacks steps. Create a small executable smoke/check for the visible expected result.
 - For temporal ideas like splash disappearing, use wait + assertNotVisible.
 - Write descriptions in ${langNote}.`
 
@@ -833,6 +842,7 @@ Return JSON like:
 
   try {
     const raw = await callAI(provider, model, systemPrompt, userMessage, 4096)
+    const parsedJson = extractJson(raw)
     const steps = parseMobileSteps(raw)
     const fallbackFlowSteps = buildFallbackMobileFlowSteps(ideas, context)
     if (
@@ -843,6 +853,7 @@ Return JSON like:
       return fallbackFlowSteps
     }
     if (steps.length > 0) return steps
+    if (Array.isArray(parsedJson)) return []
     throw new Error("steps parse failed")
   } catch (err) {
     console.warn("[generateMobileSteps] AI failed, using fallback:", err)
@@ -862,7 +873,7 @@ Return JSON like:
           description: idea.text
         }
       })
-      .filter((step): step is GeneratedMobileStep => step !== null)
+      .filter((step) => step !== null) as GeneratedMobileStep[]
   }
 }
 

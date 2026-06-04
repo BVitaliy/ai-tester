@@ -18,7 +18,7 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 const variantClasses: Record<Variant, string> = {
   // Solid primary button with our primary color
   primary:
-    "bg-[var(--primary)] text-white hover:bg-opacity-90 disabled:bg-opacity-60",
+    "bg-white text-gray-900 border border-gray-300 hover:bg-gray-50 disabled:opacity-50",
   // Secondary button used for less important actions (white background)
   secondary:
     "bg-white text-gray-800 border border-gray-300 hover:bg-gray-50 disabled:opacity-50",
@@ -32,8 +32,8 @@ const variantClasses: Record<Variant, string> = {
 }
 
 const sizeClasses: Record<Size, string> = {
-  sm: "px-2.5 py-1 text-xs",
-  md: "px-3.5 py-1.5 text-sm"
+  sm: "min-h-[42px] px-3 py-2 text-xs",
+  md: "min-h-[42px] px-4 py-2 text-sm"
 }
 
 export function Button({
