@@ -17,6 +17,7 @@
     "agent:install": "node scripts/install-agent-service.mjs",
     "agent:uninstall": "node scripts/uninstall-agent-service.mjs",
     "agent:status": "node scripts/agent-status.mjs",
+    "native-host:install": "node scripts/install-native-host.mjs",
     "companion:build": "node scripts/build-companion-app.mjs"
   },
   "dependencies": {
@@ -59,7 +60,8 @@
       "storage",
       "tabs",
       "downloads",
-      "tabCapture"
+      "tabCapture",
+      "nativeMessaging"
     ]
   }
 }

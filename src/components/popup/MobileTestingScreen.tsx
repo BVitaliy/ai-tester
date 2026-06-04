@@ -227,6 +227,10 @@ function elementLabel(element: MobileElement) {
   return element.text || element.contentDesc || element.resourceId || element.label
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
 function buildHtmlReport(opts: {
   lang: string
   title: string
@@ -384,6 +388,7 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
   const [appsLoading, setAppsLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [testing, setTesting] = useState(false)
+  const [agentStarting, setAgentStarting] = useState(false)
   const [activeRunMode, setActiveRunMode] = useState<"ideas" | "prompt" | "recorded" | null>(null)
   const [testProgress, setTestProgress] = useState<TestProgressState>({
     phase: "idle",
@@ -479,6 +484,54 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
       )
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadDevicesSnapshot = async () => {
+    const [nextHealth, nextDevices] = await Promise.all([
+      getMobileAgentHealth(),
+      getMobileDevices()
+    ])
+    setHealth(nextHealth)
+    setDevices(nextDevices.connected)
+    setEmulators(nextDevices.availableEmulators)
+    setIosSimulators(nextDevices.availableIosSimulators ?? [])
+    return nextDevices
+  }
+
+  const waitForDevice = async (
+    match: (device: MobileDevice) => boolean,
+    attempts = 12
+  ) => {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const snapshot = await loadDevicesSnapshot()
+      const device = snapshot.connected.find(match)
+      if (device) {
+        setSelectedDeviceId(device.id)
+        return device
+      }
+      await delay(2500)
+    }
+    return null
+  }
+
+  const handleStartAgent = async () => {
+    setAgentStarting(true)
+    setError(null)
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "RDQA_AGENT_CONTROL",
+        action: health?.ok ? "restart" : "start"
+      })
+      if (!response?.ok) {
+        throw new Error(response?.error ?? t("mErrStartAgent"))
+      }
+      if (response.health) setHealth(response.health)
+      window.setTimeout(refresh, 800)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("mErrStartAgent"))
+    } finally {
+      setAgentStarting(false)
     }
   }
 
@@ -581,7 +634,14 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
     setLoading(true)
     try {
       await startAndroidEmulator(name)
-      setTimeout(refresh, 2500)
+      const device = await waitForDevice(
+        (candidate) =>
+          candidate.platform === "android" &&
+          candidate.type === "emulator" &&
+          candidate.state === "device",
+        18
+      )
+      if (!device) await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : t("mErrStartEmulator"))
     } finally {
@@ -594,7 +654,11 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
     setLoading(true)
     try {
       await startIosSimulator(deviceId)
-      setTimeout(refresh, 2500)
+      const device = await waitForDevice(
+        (candidate) => candidate.platform === "ios" && candidate.id === deviceId && candidate.state === "Booted",
+        8
+      )
+      if (!device) await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : t("mErrStartSimulator"))
     } finally {
@@ -1132,15 +1196,21 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
           </button>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-          <img
-            src={redstoneIcon}
-            alt="REDSTONE QA"
-            style={{ width: 22, height: 22, display: "block", borderRadius: 6, flexShrink: 0 }}
-          />
-          <div style={{ display: "flex", alignItems: "baseline", gap: 3, flexShrink: 0 }}>
-            <span style={{ color: "#ffffff", fontSize: 13, lineHeight: 1, fontWeight: 800, letterSpacing: "0.04em" }}>REDSTONE</span>
-            <span style={{ color: "#c2c2c2", fontSize: 13, lineHeight: 1, fontWeight: 700, letterSpacing: "0.02em" }}>QA</span>
-          </div>
+          <a
+            href="https://redstone.agency/"
+            target="_blank"
+            rel="noreferrer"
+            style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, textDecoration: "none" }}>
+            <img
+              src={redstoneIcon}
+              alt="REDSTONE QA"
+              style={{ width: 22, height: 22, display: "block", borderRadius: 6, flexShrink: 0 }}
+            />
+            <div style={{ display: "flex", alignItems: "baseline", gap: 3, flexShrink: 0 }}>
+              <span style={{ color: "#ffffff", fontSize: 13, lineHeight: 1, fontWeight: 800, letterSpacing: "0.04em" }}>REDSTONE</span>
+              <span style={{ color: "#c2c2c2", fontSize: 13, lineHeight: 1, fontWeight: 700, letterSpacing: "0.02em" }}>QA</span>
+            </div>
+          </a>
           <span style={{ width: 1, height: 16, background: "var(--border)", flexShrink: 0 }} />
           <Smartphone size={15} style={{ color: "#f87171", flexShrink: 0 }} />
           <span style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap" }}>{t("mMobileTitle")}</span>
@@ -1164,8 +1234,19 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
 
       <div className="jack-scroll" style={{ overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={panelStyle}>
-          <div style={{ fontSize: 11, color: error ? "#f87171" : "#c2c2c2", lineHeight: 1.45 }}>
-            {statusText(health, error, t)}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center" }}>
+            <div style={{ fontSize: 11, color: error ? "#f87171" : "#c2c2c2", lineHeight: 1.45, minWidth: 0 }}>
+              {agentStarting ? t("mAgentStarting") : statusText(health, error, t)}
+            </div>
+            <Button
+              size="sm"
+              className="whitespace-nowrap"
+              disabled={agentStarting}
+              loading={agentStarting}
+              onClick={handleStartAgent}>
+              <Rocket size={12} />
+              {health?.ok ? t("mRestartAgent") : t("mStartAgent")}
+            </Button>
           </div>
         </div>
 

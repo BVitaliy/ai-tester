@@ -365,6 +365,39 @@ async function getFocusedWindow(deviceId) {
   }
 }
 
+async function getAndroidScreenSize(deviceId) {
+  try {
+    const { stdout } = await run("adb", adbArgs(deviceId, ["shell", "wm", "size"]))
+    const match = stdout.match(/(\d+)x(\d+)/)
+    if (match) return { width: Number(match[1]), height: Number(match[2]) }
+  } catch {}
+  return { width: 1080, height: 1920 }
+}
+
+async function scrollScreen(deviceId, direction = "down") {
+  requireDeviceId(deviceId)
+  if (await isIosSimulator(deviceId)) {
+    return withIosAppiumSession(deviceId, async (session) => {
+      await appiumRequest("POST", `/session/${session.sessionId}/execute/sync`, {
+        script: "mobile: scroll",
+        args: [{ direction }]
+      }, 20000)
+    })
+  }
+  const size = await getAndroidScreenSize(deviceId)
+  const x = Math.round(size.width / 2)
+  const startY = direction === "down"
+    ? Math.round(size.height * 0.75)
+    : Math.round(size.height * 0.25)
+  const endY = direction === "down"
+    ? Math.round(size.height * 0.25)
+    : Math.round(size.height * 0.75)
+  await run("adb", adbArgs(deviceId, [
+    "shell", "input", "swipe",
+    String(x), String(startY), String(x), String(endY), "600"
+  ]))
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
@@ -812,7 +845,23 @@ function result(id, title, status, details = {}) {
     status,
     message: details.message ?? "",
     evidence: details.evidence ?? [],
-    error: details.error
+    error: details.error,
+    screenshotDataUrl: details.screenshotDataUrl,
+    screenshotError: details.screenshotError
+  }
+}
+
+async function withStepScreenshot(deviceId, item) {
+  try {
+    return {
+      ...item,
+      screenshotDataUrl: await captureScreenshot(deviceId)
+    }
+  } catch (error) {
+    return {
+      ...item,
+      screenshotError: error instanceof Error ? error.message : String(error)
+    }
   }
 }
 
@@ -882,25 +931,66 @@ function normalizeSearchText(value = "") {
     .toLowerCase()
     .replace(/[ʼ’`]/g, "'")
     .replace(/\*/g, "")
+    .replace(/[“”«»]/g, "")
     .replace(/\s+/g, " ")
     .trim()
 }
 
-function findElementByTarget(ui, target = "") {
+function targetAlternatives(target = "") {
   const normalized = normalizeSearchText(target)
-  if (!normalized) return null
+  const alternatives = new Set([normalized])
+
+  for (const part of normalized.split(/[\/|,;]/g)) {
+    const clean = normalizeSearchText(part)
+    if (clean) alternatives.add(clean)
+  }
+
+  const add = (...values) => values.forEach((value) => {
+    const clean = normalizeSearchText(value)
+    if (clean) alternatives.add(clean)
+  })
+
+  if (/(user|profile|account|профіль|акаунт|користувач|юзер)/i.test(normalized)) {
+    add("user", "profile", "account", "профіль", "акаунт", "користувач")
+  }
+  if (/(вхід|увійти|логін|login|sign in)/i.test(normalized)) {
+    add("увійти", "вхід", "логін", "login", "sign in")
+  }
+  if (/(реєстрац|зареєстр|register|sign up)/i.test(normalized)) {
+    add("зареєструватись", "зареєструватися", "реєстрація", "register", "sign up")
+  }
+  if (/(підтвердження пароля|confirm password|повтор)/i.test(normalized)) {
+    add("повторіть пароль", "підтвердження пароля", "confirm password")
+  }
+  if (/(погод|правил|terms|privacy)/i.test(normalized)) {
+    add("я погоджуюсь", "погоджуюсь", "правилами користування", "правила", "terms", "privacy")
+  }
+  if (/(домівка|home|головна)/i.test(normalized)) {
+    add("домівка", "головна", "home")
+  }
+
+  return Array.from(alternatives).filter(Boolean)
+}
+
+function findElementByTarget(ui, target = "") {
+  const alternatives = targetAlternatives(target)
+  if (!alternatives.length) return null
   const elements = ui?.elements ?? []
-  const exact = elements.find((element) =>
-    [element.label, element.text, element.contentDesc, element.resourceId]
-      .filter(Boolean)
-      .some((value) => normalizeSearchText(value) === normalized)
-  )
-  if (exact) return exact
+  for (const normalized of alternatives) {
+    const exact = elements.find((element) =>
+      [element.label, element.text, element.contentDesc, element.resourceId]
+        .filter(Boolean)
+        .some((value) => normalizeSearchText(value) === normalized)
+    )
+    if (exact) return exact
+  }
 
-  const contains = elements.find((element) => elementSearchText(element).includes(normalized))
-  if (contains) return contains
+  for (const normalized of alternatives) {
+    const contains = elements.find((element) => elementSearchText(element).includes(normalized))
+    if (contains) return contains
+  }
 
-  const tokens = textTokens(normalized)
+  const tokens = textTokens(alternatives.join(" "))
   if (!tokens.length) return null
   const scored = elements
     .map((element) => ({
@@ -941,11 +1031,19 @@ async function executeMobileStep(deviceId, step) {
       return result(id, title, "passed", { message: `Waited ${timeoutMs}ms` })
     }
 
+    if (step.action === "scroll") {
+      const direction = step.value === "up" ? "up" : "down"
+      await scrollScreen(deviceId, direction)
+      await sleep(500)
+      return result(id, title, "passed", { message: `Scrolled ${direction}` })
+    }
+
     if (step.action === "assertVisible") {
-      const { element } = await waitForElement(deviceId, step.target, timeoutMs, true)
+      const { element, ui } = await waitForElement(deviceId, step.target, timeoutMs, true)
       if (!element) {
+        const visible = (ui?.elements ?? []).slice(0, 8).map((e) => e.label).filter(Boolean)
         return result(id, title, "failed", {
-          message: `Expected visible target was not found: ${step.target}`
+          message: `Expected element not found: "${step.target}". Visible on screen: ${visible.length ? visible.join(", ") : "none"}`
         })
       }
       return result(id, title, "passed", {
@@ -955,7 +1053,7 @@ async function executeMobileStep(deviceId, step) {
     }
 
     if (step.action === "assertNotVisible") {
-      const { element } = await waitForElement(deviceId, step.target, timeoutMs, false)
+      const { element, ui } = await waitForElement(deviceId, step.target, timeoutMs, false)
       if (element) {
         return result(id, title, "failed", {
           message: `Target is still visible: ${step.target}`,
@@ -968,15 +1066,23 @@ async function executeMobileStep(deviceId, step) {
     }
 
     if (step.action === "tap" || step.action === "input") {
-      const { element } = await waitForElement(deviceId, step.target, timeoutMs, true)
+      const { element, ui } = await waitForElement(deviceId, step.target, timeoutMs, true)
       if (!element) {
+        const visible = (ui?.elements ?? []).slice(0, 8).map((e) => e.label).filter(Boolean)
         return result(id, title, "failed", {
-          message: `Target was not found: ${step.target}`
+          message: `Target not found: "${step.target}". Visible on screen: ${visible.length ? visible.join(", ") : "none"}`
         })
       }
       await tapElement(deviceId, element)
       if (step.action === "input") {
-        await sleep(300)
+        await sleep(600)
+        const isIos = await isIosSimulator(deviceId)
+        if (!isIos) {
+          await run("adb", adbArgs(deviceId, ["shell", "input", "keyevent", "KEYCODE_CTRL_A"])).catch(() => {})
+          await sleep(100)
+          await run("adb", adbArgs(deviceId, ["shell", "input", "keyevent", "KEYCODE_DEL"])).catch(() => {})
+          await sleep(100)
+        }
         await typeText(deviceId, step.value ?? "")
       }
       return result(id, title, "passed", {
@@ -1061,13 +1167,15 @@ async function runMobileSteps({ deviceId, packageName, steps = [] }) {
   }
 
   for (const step of steps) {
-    results.push(await executeMobileStep(deviceId, step))
+    const stepResult = await executeMobileStep(deviceId, step)
+    results.push(await withStepScreenshot(deviceId, stepResult))
   }
 
   try {
     screenshotDataUrl = await captureScreenshot(deviceId)
     results.push(result("capture-screenshot", "Capture final screenshot", "passed", {
-      message: "Final screenshot captured"
+      message: "Final screenshot captured",
+      screenshotDataUrl
     }))
   } catch (error) {
     results.push(result("capture-screenshot", "Capture final screenshot", "failed", {

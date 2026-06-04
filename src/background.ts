@@ -37,6 +37,7 @@ import {
 const EDITOR_URL = chrome.runtime.getURL("tabs/editor.html")
 const WINDOW_WIDTH = 520
 const WINDOW_HEIGHT = 760
+const RDQA_NATIVE_HOST = "studio.redstone.rdqa_companion"
 
 let aiAbortController: AbortController | null = null
 
@@ -49,6 +50,19 @@ function startAiAbortController(): AbortSignal {
 function abortAi(): void {
   aiAbortController?.abort()
   aiAbortController = null
+}
+
+function sendNativeAgentAction(action: "health" | "start" | "restart" | "install" | "uninstall"): Promise<any> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendNativeMessage(RDQA_NATIVE_HOST, { action }, (response) => {
+      const error = chrome.runtime.lastError
+      if (error) {
+        resolve({ ok: false, action, error: error.message })
+        return
+      }
+      resolve(response ?? { ok: false, action, error: "Native host returned an empty response" })
+    })
+  })
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -247,6 +261,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const { failedPhase, sessionKey } = message
     const fn = failedPhase === "code" ? runJackGenerateCode : runJackGenerateIdeas
     fn(sessionKey).then(() => sendResponse({ ok: true }))
+    return true
+  }
+
+  if (message.type === "RDQA_AGENT_CONTROL") {
+    sendNativeAgentAction(message.action ?? "restart").then(sendResponse)
     return true
   }
 })

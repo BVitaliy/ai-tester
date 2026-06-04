@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process"
+import fsSync from "node:fs"
 import fs from "node:fs/promises"
 import http from "node:http"
 import os from "node:os"
@@ -12,7 +13,9 @@ const LABEL = "studio.redstone.rdqa-agent"
 const PORT = "17321"
 const resourcesDir = path.dirname(fileURLToPath(import.meta.url))
 const nodePath = process.execPath
-const serverPath = path.join(resourcesDir, "qa-agent", "server.mjs")
+const bundledServerPath = path.join(resourcesDir, "qa-agent", "server.mjs")
+const sourceServerPath = path.resolve(resourcesDir, "..", "qa-agent", "server.mjs")
+const serverPath = fsSync.existsSync(bundledServerPath) ? bundledServerPath : sourceServerPath
 const launchAgentsDir = path.join(os.homedir(), "Library", "LaunchAgents")
 const logsDir = path.join(os.homedir(), "Library", "Logs")
 const plistPath = path.join(launchAgentsDir, `${LABEL}.plist`)
@@ -123,7 +126,7 @@ function healthRequest() {
       })
     })
     req.on("error", (error) => resolve({ ok: false, error: error.message }))
-    req.setTimeout(2500, () => {
+    req.setTimeout(5000, () => {
       req.destroy()
       resolve({ ok: false, error: "Health check timeout" })
     })
@@ -160,7 +163,98 @@ function formatHealth(health) {
   ].join("\n")
 }
 
+function readNativeMessage() {
+  return new Promise((resolve, reject) => {
+    let buffer = Buffer.alloc(0)
+    let done = false
+    const cleanup = () => {
+      process.stdin.off("data", onData)
+      process.stdin.off("end", onEnd)
+      process.stdin.off("error", onError)
+    }
+    const finish = (value) => {
+      if (done) return
+      done = true
+      cleanup()
+      resolve(value)
+    }
+    const fail = (error) => {
+      if (done) return
+      done = true
+      cleanup()
+      reject(error)
+    }
+    const tryRead = () => {
+      if (buffer.length < 4) {
+        return
+      }
+      const length = buffer.readUInt32LE(0)
+      if (buffer.length < 4 + length) return
+      const payload = buffer.subarray(4, 4 + length).toString("utf8")
+      try {
+        finish(JSON.parse(payload))
+      } catch (error) {
+        fail(error)
+      }
+    }
+    const onData = (chunk) => {
+      buffer = Buffer.concat([buffer, chunk])
+      tryRead()
+    }
+    const onEnd = () => finish(null)
+    const onError = (error) => fail(error)
+    process.stdin.on("data", onData)
+    process.stdin.on("end", onEnd)
+    process.stdin.on("error", onError)
+  })
+}
+
+function writeNativeMessage(message) {
+  const payload = Buffer.from(JSON.stringify(message), "utf8")
+  const header = Buffer.alloc(4)
+  header.writeUInt32LE(payload.length, 0)
+  process.stdout.write(Buffer.concat([header, payload]))
+}
+
+async function runNativeHost() {
+  try {
+    const message = await readNativeMessage()
+    const action = message?.action ?? "health"
+
+    if (action === "health") {
+      writeNativeMessage({ ok: true, action, health: await healthRequest() })
+      return
+    }
+
+    if (action === "install" || action === "start" || action === "restart") {
+      if (!(await fs.stat(serverPath).catch(() => null))) {
+        writeNativeMessage({ ok: false, action, error: `qa-agent server was not found: ${serverPath}` })
+        return
+      }
+      await installService()
+      await new Promise((resolve) => setTimeout(resolve, 1200))
+      writeNativeMessage({ ok: true, action, health: await healthRequest() })
+      return
+    }
+
+    if (action === "uninstall") {
+      await uninstallService()
+      writeNativeMessage({ ok: true, action, health: await healthRequest() })
+      return
+    }
+
+    writeNativeMessage({ ok: false, action, error: `Unknown action: ${action}` })
+  } catch (error) {
+    writeNativeMessage({ ok: false, error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
 async function main() {
+  if (process.argv.includes("--native")) {
+    await runNativeHost()
+    return
+  }
+
   if (!(await fs.stat(serverPath).catch(() => null))) {
     await dialog(`qa-agent server was not found:\n${serverPath}`, ["Quit"], "Quit")
     return
