@@ -252,3 +252,214 @@ export function runMobileSteps(
     body: JSON.stringify({ deviceId, packageName, steps })
   })
 }
+
+export interface AppMapScreenSummary {
+  id: string
+  name: string
+  purpose: string
+  fingerprint: string
+  visibleTextCount: number
+  clickableCount: number
+  transitionCount: number
+}
+
+export interface AppMapSummary {
+  appId: string
+  platform: "android" | "ios"
+  deviceId: string
+  createdAt: string
+  updatedAt: string
+  screenCount: number
+  transitionCount: number
+  screens: AppMapScreenSummary[]
+}
+
+export interface AppMapTransition {
+  action: { label: string; elementId?: string; kind?: string }
+  toScreenId: string | null
+}
+
+export interface AppMapScreen {
+  id: string
+  fingerprint: string
+  name: string
+  purpose: string
+  screenshotPath: string | null
+  uiTreePath: string | null
+  focusedWindow: string
+  visibleTexts: string[]
+  clickableElements: Array<{
+    id: string
+    label: string
+    text: string
+    contentDesc: string
+    resourceId: string
+    className: string
+    bounds: { centerX: number; centerY: number; width: number; height: number } | null
+  }>
+  transitions: AppMapTransition[]
+}
+
+export interface AppMap {
+  appId: string
+  platform: "android" | "ios"
+  deviceId: string
+  createdAt: string
+  updatedAt: string
+  screens: AppMapScreen[]
+}
+
+export interface ScanOptions {
+  maxDepth?: number
+  maxScreens?: number
+  maxActionsPerScreen?: number
+  waitAfterActionMs?: number
+  avoidDangerousActions?: boolean
+}
+
+export type ScanJobStatus = "running" | "stopping" | "stopped" | "done" | "error"
+
+export interface ScanEvent {
+  at: number
+  type: string
+  name?: string
+  label?: string
+  reason?: string
+  screenId?: string
+  to?: string
+  resuming?: boolean
+}
+
+export interface ScanJob {
+  id: string
+  deviceId: string
+  appId: string
+  platform: "android" | "ios"
+  status: ScanJobStatus
+  startedAt: number
+  updatedAt: number
+  current: { phase?: string; name?: string; action?: string; screenId?: string } | null
+  counts: { screens: number; transitions: number; skipped: number }
+  skippedDangerous: Array<{ screenId: string; label: string; reason: string }>
+  events: ScanEvent[]
+  summary: AppMapSummary | null
+  filePath: string | null
+  error: string | null
+  resumable: boolean
+}
+
+export interface ScanStartResult extends ScanJob {
+  ok: boolean
+}
+
+export interface ScanStatusResult {
+  ok: boolean
+  job: ScanJob | null
+}
+
+export interface AppMapResult {
+  ok: boolean
+  filePath: string
+  summary: AppMapSummary
+  appMap: AppMap
+}
+
+export interface ScreenAnalysis {
+  ok: boolean
+  fingerprint: string
+  screenName: string
+  purpose: string
+  importantElements: string[]
+  possibleUserFlows: string[]
+  risks: string[]
+  suggestedTests: Array<{
+    title: string
+    priority: "high" | "medium" | "low"
+    steps: MobileExecutableStep[]
+  }>
+  source: string
+  aiError?: string
+}
+
+export interface GeneratedFlow {
+  id: string
+  type: "smoke" | "navigation" | "form-validation" | "auth" | "deep-link"
+  title: string
+  target?: string
+  priority: "high" | "medium" | "low"
+  placeholder?: boolean
+  steps: MobileExecutableStep[]
+}
+
+export interface GeneratedFlowsResult {
+  ok: boolean
+  flows: GeneratedFlow[]
+  summary: { total: number; byType: Record<string, number> }
+  packageName: string
+  platform: "android" | "ios"
+}
+
+export function startAppScan(
+  deviceId: string,
+  appId: string,
+  opts?: { platform?: "android" | "ios"; options?: ScanOptions; resume?: boolean }
+): Promise<ScanStartResult> {
+  return agentFetch<ScanStartResult>("/app/scan", {
+    method: "POST",
+    body: JSON.stringify({
+      deviceId,
+      appId,
+      platform: opts?.platform,
+      options: opts?.options,
+      resume: opts?.resume ?? false
+    })
+  })
+}
+
+export function getScanStatus(deviceId: string, appId: string): Promise<ScanStatusResult> {
+  const params = new URLSearchParams({ deviceId, appId })
+  return agentFetch<ScanStatusResult>(`/app/scan/status?${params}`)
+}
+
+export function stopAppScan(deviceId: string, appId: string): Promise<ScanStartResult> {
+  return agentFetch<ScanStartResult>("/app/scan/stop", {
+    method: "POST",
+    body: JSON.stringify({ deviceId, appId })
+  })
+}
+
+export function getAppMap(filter?: {
+  appId?: string
+  platform?: string
+  deviceId?: string
+}): Promise<AppMapResult> {
+  const params = new URLSearchParams()
+  if (filter?.appId) params.set("appId", filter.appId)
+  if (filter?.platform) params.set("platform", filter.platform)
+  if (filter?.deviceId) params.set("deviceId", filter.deviceId)
+  const query = params.toString()
+  return agentFetch<AppMapResult>(`/app/map${query ? `?${query}` : ""}`)
+}
+
+export function analyzeCurrentScreen(deviceId: string): Promise<ScreenAnalysis> {
+  return agentFetch<ScreenAnalysis>("/app/analyze-screen", {
+    method: "POST",
+    body: JSON.stringify({ deviceId })
+  })
+}
+
+export function appMapScreenshotUrl(fingerprint: string): string {
+  return `${DEFAULT_AGENT_URL}/app/screenshot?fingerprint=${encodeURIComponent(fingerprint)}`
+}
+
+export function generateTestsFromMap(payload: {
+  appMap?: AppMap
+  appId?: string
+  platform?: string
+  deviceId?: string
+}): Promise<GeneratedFlowsResult> {
+  return agentFetch<GeneratedFlowsResult>("/tests/from-map", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  })
+}

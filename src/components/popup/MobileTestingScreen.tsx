@@ -36,6 +36,7 @@ import { compressDataUrl } from "../../lib/screenshotStorage"
 import { getSettings, setLastSessionKey, updateSessionState } from "../../store/jack"
 import redstoneIcon from "data-base64:~../assets/icon2.png"
 import { ActionCard } from "./ActionCard"
+import { AppMapPanel } from "./AppMapPanel"
 import { Button } from "../ui/Button"
 import { CameraIcon, CrosshairIcon, RecordActionsIcon, VideoIcon } from "../ui/icons"
 import { VoiceInput } from "../ui/VoiceInput"
@@ -1346,6 +1347,12 @@ export function MobileTestingScreen({ onBack, onOpenCode, onOpenSettings }: Prop
             {t("mStartApp")}
           </Button>
         </div>
+
+        <AppMapPanel
+          deviceId={selectedDeviceId}
+          packageName={selectedPackage}
+          appLabel={selectedApp?.label}
+        />
 
         <div style={panelStyle}>
           <div style={{ fontSize: 11, color: "#c2c2c2", marginBottom: 4 }}>{t("mContextTitle")}</div>

@@ -5,6 +5,12 @@ import os from "node:os"
 import path from "node:path"
 import { URL } from "node:url"
 
+import { analyzeScreen } from "./ai-screen-analyzer.mjs"
+import { APP_MAPS_DIR, assignScreenNames, findLatestAppMap, loadAppMap, summarizeAppMap } from "./app-map-store.mjs"
+import { createScreenFingerprint } from "./screen-fingerprint.mjs"
+import { getJob, jobSnapshot, startScan, stopScan } from "./scan-jobs.mjs"
+import { generateTestsFromAppMap } from "./test-generator.mjs"
+
 const HOST = process.env.QA_AGENT_HOST ?? "127.0.0.1"
 const PORT = Number(process.env.QA_AGENT_PORT ?? 17321)
 const APPIUM_HOST = process.env.APPIUM_HOST ?? "127.0.0.1"
@@ -44,7 +50,7 @@ function readBody(req) {
     req.setEncoding("utf8")
     req.on("data", (chunk) => {
       data += chunk
-      if (data.length > 1024 * 1024) {
+      if (data.length > 10 * 1024 * 1024) {
         reject(new Error("Request body too large"))
         req.destroy()
       }
@@ -396,6 +402,17 @@ async function scrollScreen(deviceId, direction = "down") {
     "shell", "input", "swipe",
     String(x), String(startY), String(x), String(endY), "600"
   ]))
+}
+
+async function pressBack(deviceId) {
+  requireDeviceId(deviceId)
+  if (await isIosSimulator(deviceId)) {
+    await withIosAppiumSession(deviceId, async (session) => {
+      await appiumRequest("POST", `/session/${session.sessionId}/back`, {}, 20000)
+    })
+    return
+  }
+  await run("adb", adbArgs(deviceId, ["shell", "input", "keyevent", "KEYCODE_BACK"]))
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
@@ -1281,6 +1298,51 @@ async function runMobileTests({ deviceId, packageName, ideas = [] }) {
   }
 }
 
+function crawlerDeps() {
+  return {
+    dumpUi,
+    captureScreenshot,
+    tapElement,
+    scrollScreen,
+    startApp,
+    pressBack,
+    isIosSimulator,
+    sleep
+  }
+}
+
+async function resolvePlatform(deviceId, fallback) {
+  if (fallback) return fallback
+  return (await isIosSimulator(deviceId)) ? "ios" : "android"
+}
+
+async function startAppScan({ deviceId, platform, appId, options = {}, resume = false }) {
+  requireDeviceId(deviceId)
+  if (!appId) throw new Error("appId is required")
+  const resolvedPlatform = await resolvePlatform(deviceId, platform)
+  const job = startScan(crawlerDeps(), {
+    deviceId,
+    appId,
+    platform: resolvedPlatform,
+    options,
+    resume
+  })
+  return { ok: true, ...jobSnapshot(job) }
+}
+
+async function analyzeCurrentScreen({ deviceId }) {
+  requireDeviceId(deviceId)
+  const uiTree = await dumpUi(deviceId)
+  const fp = createScreenFingerprint(uiTree)
+  const analysis = await analyzeScreen({
+    uiTree,
+    visibleTexts: fp.visibleTexts,
+    clickableElements: fp.clickableElements,
+    focusedWindow: fp.focusedWindow
+  })
+  return { ok: true, fingerprint: fp.fingerprint, ...analysis }
+}
+
 async function route(req, res) {
   if (req.method === "OPTIONS") {
     json(res, 204, {})
@@ -1425,6 +1487,110 @@ async function route(req, res) {
         packageName: body.packageName ?? "",
         steps: Array.isArray(body.steps) ? body.steps : []
       }))
+      return
+    }
+
+    if (req.method === "POST" && url.pathname === "/app/scan") {
+      const body = await readBody(req)
+      json(res, 200, await startAppScan({
+        deviceId: body.deviceId ?? "",
+        platform: body.platform,
+        appId: body.appId ?? body.packageName ?? "",
+        options: body.options ?? {},
+        resume: body.resume === true
+      }))
+      return
+    }
+
+    if (req.method === "GET" && url.pathname === "/app/scan/status") {
+      const deviceId = url.searchParams.get("deviceId") ?? ""
+      const appId = url.searchParams.get("appId") ?? url.searchParams.get("packageName") ?? ""
+      const job = getJob(deviceId, appId)
+      if (!job) {
+        json(res, 200, { ok: true, job: null })
+        return
+      }
+      json(res, 200, { ok: true, job: jobSnapshot(job) })
+      return
+    }
+
+    if (req.method === "POST" && url.pathname === "/app/scan/stop") {
+      const body = await readBody(req)
+      const job = stopScan(body.deviceId ?? "", body.appId ?? body.packageName ?? "")
+      if (!job) {
+        json(res, 404, { ok: false, error: "No scan job found" })
+        return
+      }
+      json(res, 200, { ok: true, ...jobSnapshot(job) })
+      return
+    }
+
+    if (req.method === "GET" && url.pathname === "/app/screenshot") {
+      const fingerprint = url.searchParams.get("fingerprint") ?? ""
+      if (!/^[a-f0-9]{1,40}$/.test(fingerprint)) {
+        json(res, 400, { ok: false, error: "invalid fingerprint" })
+        return
+      }
+      const file = path.join(APP_MAPS_DIR, "screenshots", `${fingerprint}.png`)
+      try {
+        const data = await fs.readFile(file)
+        res.writeHead(200, {
+          "Access-Control-Allow-Origin": "*",
+          "Content-Type": "image/png",
+          "Content-Length": data.length
+        })
+        res.end(data)
+      } catch {
+        json(res, 404, { ok: false, error: "screenshot not found" })
+      }
+      return
+    }
+
+    if (req.method === "GET" && url.pathname === "/app/map") {
+      const filter = {
+        appId: url.searchParams.get("appId") ?? undefined,
+        platform: url.searchParams.get("platform") ?? undefined,
+        deviceId: url.searchParams.get("deviceId") ?? undefined
+      }
+      const found = await findLatestAppMap(filter)
+      if (!found) {
+        json(res, 404, { ok: false, error: "No app map found" })
+        return
+      }
+      assignScreenNames(found.appMap)
+      json(res, 200, {
+        ok: true,
+        filePath: found.filePath,
+        summary: summarizeAppMap(found.appMap),
+        appMap: found.appMap
+      })
+      return
+    }
+
+    if (req.method === "POST" && url.pathname === "/app/analyze-screen") {
+      const body = await readBody(req)
+      json(res, 200, await analyzeCurrentScreen({ deviceId: body.deviceId ?? "" }))
+      return
+    }
+
+    if (req.method === "POST" && url.pathname === "/tests/from-map") {
+      const body = await readBody(req)
+      let appMap = body.appMap
+      if (!appMap) {
+        const found = body.filePath
+          ? { appMap: await loadAppMap(body.filePath) }
+          : await findLatestAppMap({
+              appId: body.appId,
+              platform: body.platform,
+              deviceId: body.deviceId
+            })
+        appMap = found?.appMap
+      }
+      if (!appMap) {
+        json(res, 404, { ok: false, error: "No app map available to generate tests from" })
+        return
+      }
+      json(res, 200, { ok: true, ...generateTestsFromAppMap(appMap, body.options ?? {}) })
       return
     }
 
