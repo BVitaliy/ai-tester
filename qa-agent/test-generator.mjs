@@ -90,6 +90,14 @@ function looksLikeAuth(screen) {
   return /login|sign in|увійти|вхід|password|пароль|register|sign up|реєстрац|зареєстр/.test(haystack)
 }
 
+// Exposed so the autonomous test designer can reuse the same BFS pathing.
+export function navStepsToScreen(appMap, targetId) {
+  const root = appMap?.screens?.[0]
+  if (!root || targetId === root.id) return []
+  const labels = pathToScreen(appMap, root.id, targetId)
+  return labels ? navigationSteps(labels) : []
+}
+
 export function generateTestsFromAppMap(appMap, options = {}) {
   stepCounter = 0
   const flows = []

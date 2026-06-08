@@ -8,6 +8,7 @@ import { URL } from "node:url"
 import { analyzeScreen } from "./ai-screen-analyzer.mjs"
 import { APP_MAPS_DIR, assignScreenNames, findLatestAppMap, loadAppMap, summarizeAppMap } from "./app-map-store.mjs"
 import { createScreenFingerprint } from "./screen-fingerprint.mjs"
+import { exploreApplication } from "./explore-orchestrator.mjs"
 import { getJob, jobSnapshot, startScan, stopScan } from "./scan-jobs.mjs"
 import { generateTestsFromAppMap } from "./test-generator.mjs"
 
@@ -1570,6 +1571,42 @@ async function route(req, res) {
     if (req.method === "POST" && url.pathname === "/app/analyze-screen") {
       const body = await readBody(req)
       json(res, 200, await analyzeCurrentScreen({ deviceId: body.deviceId ?? "" }))
+      return
+    }
+
+    if (req.method === "POST" && url.pathname === "/app/explore") {
+      const body = await readBody(req)
+      let appMap = body.appMap
+      if (!appMap) {
+        const found = body.filePath
+          ? { appMap: await loadAppMap(body.filePath) }
+          : await findLatestAppMap({
+              appId: body.appId ?? body.packageName,
+              platform: body.platform,
+              deviceId: body.deviceId
+            })
+        appMap = found?.appMap
+      }
+      if (!appMap) {
+        json(res, 404, { ok: false, error: "No app map to explore — run a scan first" })
+        return
+      }
+      const result = await exploreApplication({ appMap, appLabel: body.appLabel })
+      json(res, 200, {
+        ok: true,
+        app: result.graph.app,
+        stats: result.graph.stats,
+        confidence: result.report.confidence,
+        coverage: result.report.coverage,
+        riskSummary: result.report.riskSummary,
+        features: result.graph.features,
+        flows: result.graph.flows,
+        entities: result.graph.entities,
+        authRequirement: result.authRequirement,
+        risks: result.risks,
+        design: result.design,
+        reportMarkdown: result.report.markdown
+      })
       return
     }
 

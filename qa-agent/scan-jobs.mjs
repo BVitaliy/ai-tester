@@ -1,6 +1,7 @@
 import crypto from "node:crypto"
 
 import { createEmptyAppMap, summarizeAppMap } from "./app-map-store.mjs"
+import { makeActionPlanner } from "./goal-driven-explorer.mjs"
 import { scanAppStructure } from "./screen-crawler.mjs"
 
 // In-memory registry of scan jobs. Jobs live in the long-running agent process,
@@ -127,6 +128,12 @@ async function runJob(deps, job, options) {
       appMap: job.appMap,
       filePath: job.filePath,
       shouldStop: () => job.stopRequested,
+      selectActions: options.goalDriven
+        ? makeActionPlanner({
+            maxActionsPerScreen: Number(options.maxActionsPerScreen ?? 8),
+            maxPerSignature: Number(options.maxPerSignature ?? 2)
+          })
+        : undefined,
       onProgress: (event) => recordEvent(job, event)
     })
     job.summary = res.summary

@@ -1,0 +1,509 @@
+{
+  "elements": [
+    {
+      "id": "1",
+      "text": "",
+      "contentDesc": "Smarton",
+      "resourceId": "Smarton",
+      "className": "XCUIElementTypeApplication",
+      "packageName": "",
+      "clickable": false,
+      "enabled": true,
+      "focusable": false,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932,
+        "centerX": 215,
+        "centerY": 466,
+        "raw": "[0,0][430,932]"
+      },
+      "label": "Smarton"
+    },
+    {
+      "id": "2",
+      "text": "",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeWindow",
+      "packageName": "",
+      "clickable": false,
+      "enabled": true,
+      "focusable": false,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932,
+        "centerX": 215,
+        "centerY": 466,
+        "raw": "[0,0][430,932]"
+      },
+      "label": "XCUIElementTypeWindow"
+    },
+    {
+      "id": "3",
+      "text": "",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeOther",
+      "packageName": "",
+      "clickable": false,
+      "enabled": true,
+      "focusable": false,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932,
+        "centerX": 215,
+        "centerY": 466,
+        "raw": "[0,0][430,932]"
+      },
+      "label": "XCUIElementTypeOther"
+    },
+    {
+      "id": "4",
+      "text": "",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeOther",
+      "packageName": "",
+      "clickable": false,
+      "enabled": true,
+      "focusable": false,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932,
+        "centerX": 215,
+        "centerY": 466,
+        "raw": "[0,0][430,932]"
+      },
+      "label": "XCUIElementTypeOther"
+    },
+    {
+      "id": "5",
+      "text": "",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeOther",
+      "packageName": "",
+      "clickable": false,
+      "enabled": true,
+      "focusable": false,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932,
+        "centerX": 215,
+        "centerY": 466,
+        "raw": "[0,0][430,932]"
+      },
+      "label": "XCUIElementTypeOther"
+    },
+    {
+      "id": "6",
+      "text": "",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeOther",
+      "packageName": "",
+      "clickable": false,
+      "enabled": true,
+      "focusable": false,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932,
+        "centerX": 215,
+        "centerY": 466,
+        "raw": "[0,0][430,932]"
+      },
+      "label": "XCUIElementTypeOther"
+    },
+    {
+      "id": "7",
+      "text": "",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeOther",
+      "packageName": "",
+      "clickable": false,
+      "enabled": true,
+      "focusable": false,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932,
+        "centerX": 215,
+        "centerY": 466,
+        "raw": "[0,0][430,932]"
+      },
+      "label": "XCUIElementTypeOther"
+    },
+    {
+      "id": "8",
+      "text": "",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeOther",
+      "packageName": "",
+      "clickable": false,
+      "enabled": true,
+      "focusable": false,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932,
+        "centerX": 215,
+        "centerY": 466,
+        "raw": "[0,0][430,932]"
+      },
+      "label": "XCUIElementTypeOther"
+    },
+    {
+      "id": "9",
+      "text": "",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeOther",
+      "packageName": "",
+      "clickable": false,
+      "enabled": true,
+      "focusable": false,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932,
+        "centerX": 215,
+        "centerY": 466,
+        "raw": "[0,0][430,932]"
+      },
+      "label": "XCUIElementTypeOther"
+    },
+    {
+      "id": "10",
+      "text": "",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeOther",
+      "packageName": "",
+      "clickable": false,
+      "enabled": true,
+      "focusable": false,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932,
+        "centerX": 215,
+        "centerY": 466,
+        "raw": "[0,0][430,932]"
+      },
+      "label": "XCUIElementTypeOther"
+    },
+    {
+      "id": "11",
+      "text": "",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeOther",
+      "packageName": "",
+      "clickable": false,
+      "enabled": true,
+      "focusable": false,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932,
+        "centerX": 215,
+        "centerY": 466,
+        "raw": "[0,0][430,932]"
+      },
+      "label": "XCUIElementTypeOther"
+    },
+    {
+      "id": "12",
+      "text": "",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeImage",
+      "packageName": "",
+      "clickable": true,
+      "enabled": true,
+      "focusable": true,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932,
+        "centerX": 215,
+        "centerY": 466,
+        "raw": "[0,0][430,932]"
+      },
+      "label": "XCUIElementTypeImage"
+    },
+    {
+      "id": "13",
+      "text": "",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeImage",
+      "packageName": "",
+      "clickable": true,
+      "enabled": true,
+      "focusable": true,
+      "bounds": {
+        "x": 16,
+        "y": 69,
+        "width": 40,
+        "height": 36,
+        "centerX": 36,
+        "centerY": 87,
+        "raw": "[16,69][56,105]"
+      },
+      "label": "XCUIElementTypeImage"
+    },
+    {
+      "id": "14",
+      "text": "Увійти в кабінет",
+      "contentDesc": "Увійти в кабінет",
+      "resourceId": "Увійти в кабінет",
+      "className": "XCUIElementTypeStaticText",
+      "packageName": "",
+      "clickable": true,
+      "enabled": true,
+      "focusable": true,
+      "bounds": {
+        "x": 129,
+        "y": 580,
+        "width": 172,
+        "height": 25,
+        "centerX": 215,
+        "centerY": 593,
+        "raw": "[129,580][301,605]"
+      },
+      "label": "Увійти в кабінет"
+    },
+    {
+      "id": "15",
+      "text": "",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeOther",
+      "packageName": "",
+      "clickable": false,
+      "enabled": true,
+      "focusable": false,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 932,
+        "centerX": 215,
+        "centerY": 466,
+        "raw": "[0,0][430,932]"
+      },
+      "label": "XCUIElementTypeOther"
+    },
+    {
+      "id": "16",
+      "text": "",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeOther",
+      "packageName": "",
+      "clickable": false,
+      "enabled": true,
+      "focusable": false,
+      "bounds": {
+        "x": 16,
+        "y": 625,
+        "width": 398,
+        "height": 241,
+        "centerX": 215,
+        "centerY": 746,
+        "raw": "[16,625][414,866]"
+      },
+      "label": "XCUIElementTypeOther"
+    },
+    {
+      "id": "17",
+      "text": "",
+      "contentDesc": "Email*",
+      "resourceId": "Email*",
+      "className": "XCUIElementTypeTextField",
+      "packageName": "",
+      "clickable": true,
+      "enabled": true,
+      "focusable": true,
+      "bounds": {
+        "x": 16,
+        "y": 625,
+        "width": 398,
+        "height": 66,
+        "centerX": 215,
+        "centerY": 658,
+        "raw": "[16,625][414,691]"
+      },
+      "label": "Email*"
+    },
+    {
+      "id": "18",
+      "text": "Обов’язкове поле",
+      "contentDesc": "Обов’язкове поле",
+      "resourceId": "Обов’язкове поле",
+      "className": "XCUIElementTypeStaticText",
+      "packageName": "",
+      "clickable": true,
+      "enabled": true,
+      "focusable": true,
+      "bounds": {
+        "x": 36,
+        "y": 677,
+        "width": 111,
+        "height": 14,
+        "centerX": 92,
+        "centerY": 684,
+        "raw": "[36,677][147,691]"
+      },
+      "label": "Обов’язкове поле"
+    },
+    {
+      "id": "19",
+      "text": "•",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeTextField",
+      "packageName": "",
+      "clickable": true,
+      "enabled": true,
+      "focusable": true,
+      "bounds": {
+        "x": 16,
+        "y": 703,
+        "width": 398,
+        "height": 66,
+        "centerX": 215,
+        "centerY": 736,
+        "raw": "[16,703][414,769]"
+      },
+      "label": "•"
+    },
+    {
+      "id": "20",
+      "text": "Пароль занадто короткий",
+      "contentDesc": "Пароль занадто короткий",
+      "resourceId": "Пароль занадто короткий",
+      "className": "XCUIElementTypeStaticText",
+      "packageName": "",
+      "clickable": true,
+      "enabled": true,
+      "focusable": true,
+      "bounds": {
+        "x": 36,
+        "y": 755,
+        "width": 160,
+        "height": 14,
+        "centerX": 116,
+        "centerY": 762,
+        "raw": "[36,755][196,769]"
+      },
+      "label": "Пароль занадто короткий"
+    },
+    {
+      "id": "21",
+      "text": "",
+      "contentDesc": "",
+      "resourceId": "",
+      "className": "XCUIElementTypeImage",
+      "packageName": "",
+      "clickable": true,
+      "enabled": true,
+      "focusable": true,
+      "bounds": {
+        "x": 374,
+        "y": 707,
+        "width": 40,
+        "height": 40,
+        "centerX": 394,
+        "centerY": 727,
+        "raw": "[374,707][414,747]"
+      },
+      "label": "XCUIElementTypeImage"
+    },
+    {
+      "id": "22",
+      "text": "",
+      "contentDesc": "Увійти в кабінет",
+      "resourceId": "Увійти в кабінет",
+      "className": "XCUIElementTypeImage",
+      "packageName": "",
+      "clickable": true,
+      "enabled": true,
+      "focusable": true,
+      "bounds": {
+        "x": 16,
+        "y": 781,
+        "width": 398,
+        "height": 48,
+        "centerX": 215,
+        "centerY": 805,
+        "raw": "[16,781][414,829]"
+      },
+      "label": "Увійти в кабінет"
+    },
+    {
+      "id": "23",
+      "text": "Забули пароль?",
+      "contentDesc": "Забули пароль?",
+      "resourceId": "Забули пароль?",
+      "className": "XCUIElementTypeStaticText",
+      "packageName": "",
+      "clickable": true,
+      "enabled": true,
+      "focusable": true,
+      "bounds": {
+        "x": 16,
+        "y": 845,
+        "width": 132,
+        "height": 21,
+        "centerX": 82,
+        "centerY": 856,
+        "raw": "[16,845][148,866]"
+      },
+      "label": "Забули пароль?"
+    },
+    {
+      "id": "24",
+      "text": "Зареєструватись",
+      "contentDesc": "Зареєструватись",
+      "resourceId": "Зареєструватись",
+      "className": "XCUIElementTypeStaticText",
+      "packageName": "",
+      "clickable": true,
+      "enabled": true,
+      "focusable": true,
+      "bounds": {
+        "x": 272,
+        "y": 845,
+        "width": 142,
+        "height": 21,
+        "centerX": 343,
+        "centerY": 856,
+        "raw": "[272,845][414,866]"
+      },
+      "label": "Зареєструватись"
+    }
+  ],
+  "focusedWindow": "com.smarton.app"
+}

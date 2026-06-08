@@ -315,6 +315,8 @@ export interface ScanOptions {
   maxActionsPerScreen?: number
   waitAfterActionMs?: number
   avoidDangerousActions?: boolean
+  goalDriven?: boolean
+  maxPerSignature?: number
 }
 
 export type ScanJobStatus = "running" | "stopping" | "stopped" | "done" | "error"
@@ -445,6 +447,66 @@ export function analyzeCurrentScreen(deviceId: string): Promise<ScreenAnalysis> 
   return agentFetch<ScreenAnalysis>("/app/analyze-screen", {
     method: "POST",
     body: JSON.stringify({ deviceId })
+  })
+}
+
+export interface ExploreFeature {
+  id: string
+  type: string
+  name: string
+  confidence: number
+  screenIds: string[]
+  evidence: string[]
+}
+
+export interface ExploreFlow {
+  id: string
+  feature: string
+  featureType: string
+  confidence: number
+  steps: Array<{ node: string; value: string }>
+}
+
+export interface ExploreRisk {
+  category: string
+  level: "High" | "Medium" | "Low"
+  severity: number
+  likelihood: number
+  impact: number
+  score: number
+  rationale: string
+  evidence: string[]
+}
+
+export interface ExploreResult {
+  ok: boolean
+  app: { appId: string; platform: string; generatedAt: string }
+  stats: { featureCount: number; screenCount: number; edgeCount: number; flowCount: number; duplicateGroups: number }
+  confidence: number
+  coverage: { featureCoverage: number; screenCoverage: number; screensInFlows: number; totalScreens: number }
+  riskSummary: { total: number; byLevel: { High?: number; Medium?: number; Low?: number } }
+  features: ExploreFeature[]
+  flows: ExploreFlow[]
+  entities: Array<{ name: string; count: number }>
+  authRequirement: { likelyRequiresAuth: boolean; unauthenticatedScreens: number; authenticatedScreens: number }
+  risks: ExploreRisk[]
+  design: {
+    suites: Array<{ feature: string; featureType: string; confidence: number; cases: Array<{ kind: string; title: string; priority: string; steps: MobileExecutableStep[] }> }>
+    baseFlows: GeneratedFlow[]
+    summary: { total: number; suites: number; byKind: Record<string, number> }
+  }
+  reportMarkdown: string
+}
+
+export function exploreApplication(payload: {
+  appId?: string
+  platform?: string
+  deviceId?: string
+  appLabel?: string
+}): Promise<ExploreResult> {
+  return agentFetch<ExploreResult>("/app/explore", {
+    method: "POST",
+    body: JSON.stringify(payload)
   })
 }
 

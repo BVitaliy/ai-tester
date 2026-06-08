@@ -104,6 +104,7 @@ export async function scanAppStructure(deps, options = {}) {
     avoidDangerousActions = true,
     onProgress,
     shouldStop,
+    selectActions,
     appMap: providedAppMap,
     filePath: providedFilePath
   } = options
@@ -168,16 +169,23 @@ export async function scanAppStructure(deps, options = {}) {
     if (activeStack.has(screenId)) return
     activeStack.add(screenId)
 
-    const { actions, skipped } = getSafeClickableActions(
+    const safe = getSafeClickableActions(
       { clickableElements: screenFp.clickableElements },
       { maxActionsPerScreen, avoidDangerousActions }
     )
 
-    for (const item of skipped) {
+    for (const item of safe.skipped) {
       const entry = { screenId, label: item.label, reason: item.reason }
       skippedDangerous.push(entry)
       emit({ type: "skip", ...entry })
     }
+
+    // Goal-driven planning (optional): reorder/filter actions by inferred goals
+    // and skip already-saturated intents. Defaults to the safe-action order.
+    const actions =
+      typeof selectActions === "function"
+        ? selectActions(screenFp, safe.actions) || safe.actions
+        : safe.actions
 
     for (const action of actions) {
       if (isStopRequested()) break

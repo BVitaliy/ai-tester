@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from "react"
-import { Boxes, Download, FileSearch, Map as MapIcon, Play, RotateCcw, ScanSearch, Square } from "lucide-react"
+import { Boxes, Download, FileSearch, FileText, Map as MapIcon, Play, RotateCcw, ScanSearch, Sparkles, Square } from "lucide-react"
 
 import {
   appMapScreenshotUrl,
+  exploreApplication,
   generateTestsFromMap,
   getAppMap,
   getScanStatus,
@@ -11,12 +12,18 @@ import {
   stopAppScan,
   type AppMap,
   type AppMapResult,
+  type ExploreResult,
+  type ExploreRisk,
   type GeneratedFlow,
   type GeneratedFlowsResult,
   type MobileTestRunResult,
   type ScanEvent,
   type ScanJob
 } from "../../core/api/mobileAgent"
+import { useLanguage } from "../../contexts/LanguageContext"
+import type { StringKey } from "../../core/i18n"
+
+type T = (key: StringKey, params?: Record<string, string | number>) => string
 
 interface Props {
   deviceId: string
@@ -75,32 +82,110 @@ function statusColor(status?: string) {
   }
 }
 
-function eventLine(e: ScanEvent): string | null {
+function statusLabel(t: T, status?: string) {
+  switch (status) {
+    case "running":
+      return t("amStatusRunning")
+    case "stopping":
+      return t("amStatusStopping")
+    case "stopped":
+      return t("amStatusStopped")
+    case "done":
+      return t("amStatusDone")
+    case "error":
+      return t("amStatusError")
+    default:
+      return status ?? ""
+  }
+}
+
+// Server emits English phase strings; map the known ones to localized labels.
+function phaseLabel(t: T, phase?: string) {
+  switch (phase) {
+    case "Launching app…":
+      return t("amEvLaunching")
+    case "Resuming scan…":
+      return t("amEvResuming")
+    case "Reading screen":
+      return t("amPhaseReading")
+    case "Tapping":
+      return t("amPhaseTapping")
+    case "Opened":
+      return t("amPhaseOpened")
+    case "Stopped":
+      return t("amStatusStopped")
+    case "Done":
+      return t("amStatusDone")
+    case "Error":
+      return t("amStatusError")
+    default:
+      return phase ?? ""
+  }
+}
+
+function levelLabel(t: T, level: string) {
+  if (level === "High") return t("amLevelHigh")
+  if (level === "Medium") return t("amLevelMedium")
+  if (level === "Low") return t("amLevelLow")
+  return level
+}
+
+function featLabel(t: T, type: string, fallback: string) {
+  const camel = type
+    .split("-")
+    .map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1)))
+    .join("")
+  const key = ("feat" + camel.charAt(0).toUpperCase() + camel.slice(1)) as StringKey
+  const value = t(key)
+  return value === key ? fallback : value
+}
+
+function flowTypeMeta(t: T, type: string): { label: string; hint: string; color: string } {
+  switch (type) {
+    case "smoke":
+      return { label: t("amTypeSmoke"), hint: t("amTypeSmokeHint"), color: "#22c55e" }
+    case "navigation":
+      return { label: t("amTypeNavigation"), hint: t("amTypeNavigationHint"), color: "#38bdf8" }
+    case "form-validation":
+      return { label: t("amTypeForm"), hint: t("amTypeFormHint"), color: "#f59e0b" }
+    case "auth":
+      return { label: t("amTypeAuth"), hint: t("amTypeAuthHint"), color: "#a78bfa" }
+    case "deep-link":
+      return { label: t("amTypeDeeplink"), hint: t("amTypeDeeplinkHint"), color: "#64748b" }
+    default:
+      return { label: type, hint: "", color: "#64748b" }
+  }
+}
+
+const FLOW_TYPE_ORDER = ["smoke", "auth", "form-validation", "navigation", "deep-link"]
+
+function eventLine(t: T, e: ScanEvent): string | null {
   switch (e.type) {
     case "launch":
-      return e.resuming ? "Resuming scan…" : "Launching app…"
+      return e.resuming ? t("amEvResuming") : t("amEvLaunching")
     case "screen":
-      return `Screen: ${e.name ?? e.screenId ?? ""}`
+      return t("amEvScreen", { name: e.name ?? e.screenId ?? "" })
     case "action":
-      return `Tap: ${e.label ?? ""}`
+      return t("amEvTap", { label: e.label ?? "" })
     case "transition":
-      return `→ ${e.name ?? e.to ?? ""} (via "${e.label ?? ""}")`
+      return t("amEvTransition", { name: e.name ?? e.to ?? "", label: e.label ?? "" })
     case "no-transition":
-      return `No change after "${e.label ?? ""}"`
+      return t("amEvNoChange", { label: e.label ?? "" })
     case "skip":
-      return `Skipped unsafe: ${e.label ?? ""}`
+      return t("amEvSkipped", { label: e.label ?? "" })
     case "action-error":
-      return `Tap failed: ${e.label ?? ""}`
+      return t("amEvTapFailed", { label: e.label ?? "" })
     case "done":
-      return "Scan complete"
+      return t("amEvDone")
     case "stopped":
-      return "Scan stopped"
+      return t("amEvStopped")
     default:
       return null
   }
 }
 
 export function AppMapPanel({ deviceId, packageName, appLabel }: Props) {
+  const { t } = useLanguage()
   const [busy, setBusy] = useState<null | "map" | "tests" | "run" | "report">(null)
   const [status, setStatus] = useState<string>("")
   const [error, setError] = useState<string>("")
@@ -108,6 +193,8 @@ export function AppMapPanel({ deviceId, packageName, appLabel }: Props) {
   const [appMap, setAppMap] = useState<AppMap | null>(null)
   const [flows, setFlows] = useState<GeneratedFlowsResult | null>(null)
   const [flowRuns, setFlowRuns] = useState<FlowRun[]>([])
+  const [exploring, setExploring] = useState(false)
+  const [explore, setExplore] = useState<ExploreResult | null>(null)
 
   const ready = !!deviceId && !!packageName
   const scanning = job?.status === "running" || job?.status === "stopping"
@@ -181,6 +268,64 @@ export function AppMapPanel({ deviceId, packageName, appLabel }: Props) {
     }
   }
 
+  const waitForScanTerminal = async (timeoutMs = 240000) => {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const r = await getScanStatus(deviceId, packageName).catch(() => null)
+      if (r?.job) {
+        setJob(r.job)
+        if (r.job.status !== "running" && r.job.status !== "stopping") return r.job
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+    }
+    return null
+  }
+
+  // The headline autonomous action: understand the whole app, then report.
+  const handleExplore = async () => {
+    if (!ready) return
+    setError("")
+    setStatus("")
+    setExploring(true)
+    try {
+      let result: ExploreResult
+      try {
+        result = await exploreApplication({ appId: packageName, deviceId, appLabel })
+      } catch {
+        setStatus(t("amNoMapScanning"))
+        const started = await startAppScan(deviceId, packageName, { options: { goalDriven: true } })
+        setJob(started)
+        await waitForScanTerminal()
+        result = await exploreApplication({ appId: packageName, deviceId, appLabel })
+      }
+      setExplore(result)
+      const m = await getAppMap({ appId: packageName }).catch(() => null)
+      if (m) setAppMap(m.appMap)
+      setStatus(
+        t("amExplored", {
+          features: result.features.length,
+          risks: result.riskSummary.total,
+          confidence: result.confidence
+        })
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setExploring(false)
+    }
+  }
+
+  const handleDownloadQaReport = () => {
+    if (!explore) return
+    const blob = new Blob([explore.reportMarkdown], { type: "text/markdown;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    chrome.downloads.download({
+      url,
+      filename: `qa-report-${packageName}-${Date.now()}.md`,
+      saveAs: true
+    })
+  }
+
   const handleViewMap = async () => {
     setBusy("map")
     setError("")
@@ -188,7 +333,10 @@ export function AppMapPanel({ deviceId, packageName, appLabel }: Props) {
       const result: AppMapResult = await getAppMap({ appId: packageName })
       setAppMap(result.appMap)
       setStatus(
-        `Loaded map: ${result.summary.screenCount} screens, ${result.summary.transitionCount} transitions.`
+        t("amLoadedMap", {
+          screens: result.summary.screenCount,
+          transitions: result.summary.transitionCount
+        })
       )
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -203,7 +351,7 @@ export function AppMapPanel({ deviceId, packageName, appLabel }: Props) {
     try {
       const result = await generateTestsFromMap(appMap ? { appMap } : { appId: packageName })
       setFlows(result)
-      setStatus(`Generated ${result.summary.total} test flows.`)
+      setStatus(t("amGeneratedFlows", { n: result.summary.total }))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -222,13 +370,13 @@ export function AppMapPanel({ deviceId, packageName, appLabel }: Props) {
     try {
       for (let i = 0; i < runnable.length; i++) {
         const flow = runnable[i]
-        setStatus(`Running critical flow ${i + 1}/${runnable.length}: ${flow.title}`)
+        setStatus(t("amRunningFlow", { i: i + 1, n: runnable.length, title: flow.title }))
         const result = await runMobileSteps(deviceId, packageName, flow.steps)
         runs.push({ flow, result })
         setFlowRuns([...runs])
       }
       const passed = runs.filter((r) => r.result.summary.failed === 0).length
-      setStatus(`Ran ${runs.length} critical flows — ${passed} passed, ${runs.length - passed} with failures.`)
+      setStatus(t("amRanFlows", { n: runs.length, passed, failed: runs.length - passed }))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -249,7 +397,7 @@ export function AppMapPanel({ deviceId, packageName, appLabel }: Props) {
         filename: `app-map-report-${Date.now()}.html`,
         saveAs: true
       })
-      setStatus("App map report downloaded.")
+      setStatus(t("amMapReportDownloaded"))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -259,46 +407,60 @@ export function AppMapPanel({ deviceId, packageName, appLabel }: Props) {
 
   const scanButton = scanning ? (
     <button style={{ ...btn, borderColor: "#7f1d1d", background: "#3a1f1f" }} onClick={handleStop}>
-      <Square size={13} /> {job?.status === "stopping" ? "Stopping…" : "Stop Scan"}
+      <Square size={13} /> {job?.status === "stopping" ? t("amStopping") : t("amStopScan")}
     </button>
   ) : job?.resumable ? (
     <button style={{ ...btn, opacity: ready ? 1 : 0.5 }} disabled={!ready} onClick={() => handleScan(true)}>
-      <RotateCcw size={13} /> Resume Scan
+      <RotateCcw size={13} /> {t("amResumeScan")}
     </button>
   ) : (
     <button style={{ ...btn, opacity: ready ? 1 : 0.5 }} disabled={!ready} onClick={() => handleScan(false)}>
-      <ScanSearch size={13} /> Scan App Structure
+      <ScanSearch size={13} /> {t("amScan")}
     </button>
   )
 
   return (
     <div style={card}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#e5e5e5", fontSize: 12, fontWeight: 700 }}>
-        <Boxes size={14} /> App Structure (AI Map)
+        <Boxes size={14} /> {t("amTitle")}
       </div>
-      <div style={{ fontSize: 10, color: "#64748b", lineHeight: 1.45 }}>
-        Automatically explore the selected app, build a screen map, and generate runnable tests.
-      </div>
+      <div style={{ fontSize: 10, color: "#64748b", lineHeight: 1.45 }}>{t("amSubtitle")}</div>
+
+      <button
+        style={{
+          ...btn,
+          justifyContent: "center",
+          width: "100%",
+          background: "linear-gradient(90deg,#6d28d9,#2563eb)",
+          borderColor: "#6d28d9",
+          color: "#fff",
+          opacity: ready && !exploring && !scanning ? 1 : 0.6,
+          padding: "9px 10px"
+        }}
+        disabled={!ready || exploring || scanning}
+        onClick={handleExplore}>
+        <Sparkles size={14} /> {exploring ? t("amExploring") : t("amExplore")}
+      </button>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
         {scanButton}
         <button style={{ ...btn, opacity: !busy && !scanning ? 1 : 0.5 }} disabled={!!busy || scanning} onClick={handleViewMap}>
-          <MapIcon size={13} /> View App Map
+          <MapIcon size={13} /> {t("amViewMap")}
         </button>
         <button style={{ ...btn, opacity: !busy && !scanning ? 1 : 0.5 }} disabled={!!busy || scanning} onClick={handleGenerateTests}>
-          <FileSearch size={13} /> Generate Tests From App Map
+          <FileSearch size={13} /> {t("amGenerateTests")}
         </button>
         <button
           style={{ ...btn, opacity: ready && flows && !busy && !scanning ? 1 : 0.5 }}
           disabled={!ready || !flows || !!busy || scanning}
           onClick={handleRunCriticalFlows}>
-          <Play size={13} /> Run Critical Flows
+          <Play size={13} /> {t("amRunFlows")}
         </button>
         <button
           style={{ ...btn, opacity: appMap && !busy && !scanning ? 1 : 0.5 }}
           disabled={!appMap || !!busy || scanning}
           onClick={handleDownloadReport}>
-          <Download size={13} /> Download App Map Report
+          <Download size={13} /> {t("amDownloadMapReport")}
         </button>
       </div>
 
@@ -307,6 +469,8 @@ export function AppMapPanel({ deviceId, packageName, appLabel }: Props) {
       {status && <div style={{ fontSize: 10, color: "#a3a3a3" }}>{status}</div>}
       {error && <div style={{ fontSize: 10, color: "#f87171" }}>{error}</div>}
 
+      {explore && <ExploreResults result={explore} onDownloadReport={handleDownloadQaReport} />}
+
       {appMap && <AppMapScreens appMap={appMap} />}
 
       {flows && <GeneratedFlows flows={flows} flowRuns={flowRuns} />}
@@ -314,82 +478,98 @@ export function AppMapPanel({ deviceId, packageName, appLabel }: Props) {
   )
 }
 
-const FLOW_TYPE_META: Record<string, { label: string; hint: string; color: string }> = {
-  smoke: { label: "Smoke", hint: "App launches and the main screen loads", color: "#22c55e" },
-  navigation: { label: "Navigation", hint: "Tap a path and verify the destination screen opens", color: "#38bdf8" },
-  "form-validation": { label: "Form validation", hint: "Submit forms with empty fields; expect validation", color: "#f59e0b" },
-  auth: { label: "Auth", hint: "Login / register screens and their fields", color: "#a78bfa" },
-  "deep-link": { label: "Deep link", hint: "Placeholder until the app declares deep links", color: "#64748b" }
+function riskLevelColor(level: string) {
+  if (level === "High") return "#dc2626"
+  if (level === "Medium") return "#d97706"
+  return "#64748b"
 }
 
-const FLOW_TYPE_ORDER = ["smoke", "auth", "form-validation", "navigation", "deep-link"]
-
-function GeneratedFlows({ flows, flowRuns }: { flows: GeneratedFlowsResult; flowRuns: FlowRun[] }) {
-  const groups = new Map<string, GeneratedFlow[]>()
-  for (const flow of flows.flows) {
-    const arr = groups.get(flow.type) ?? []
-    arr.push(flow)
-    groups.set(flow.type, arr)
-  }
-  const orderedTypes = [...groups.keys()].sort(
-    (a, b) => FLOW_TYPE_ORDER.indexOf(a) - FLOW_TYPE_ORDER.indexOf(b)
-  )
-
+function ExploreResults({ result, onDownloadReport }: { result: ExploreResult; onDownloadReport: () => void }) {
+  const { t } = useLanguage()
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: "#e5e5e5" }}>
-        Generated flows ({flows.summary.total})
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, background: "#141417", border: "1px solid #3a2c5a", borderRadius: 10, padding: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <Sparkles size={14} color="#a78bfa" />
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#e5e5e5" }}>{t("amFindings")}</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, color: "#a78bfa" }}>{t("amConfidence", { n: result.confidence })}</span>
       </div>
-      {orderedTypes.map((type) => {
-        const meta = FLOW_TYPE_META[type] ?? { label: type, hint: "", color: "#64748b" }
-        const list = groups.get(type) ?? []
-        const shown = list.slice(0, 12)
-        return (
-          <div key={type} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 9, fontWeight: 700, color: "#0f0f11", background: meta.color, borderRadius: 4, padding: "1px 6px", textTransform: "uppercase" }}>
-                {meta.label}
-              </span>
-              <span style={{ fontSize: 10, color: "#94a3b8" }}>{list.length}</span>
-              <span style={{ fontSize: 9, color: "#64748b", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {meta.hint}
-              </span>
-            </div>
-            {shown.map((flow) => {
-              const run = flowRuns.find((r) => r.flow.id === flow.id)
-              return (
-                <div key={flow.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, paddingLeft: 4 }}>
-                  <span style={{ width: 6, height: 6, borderRadius: 6, background: flowPriorityColor(flow.priority), flexShrink: 0 }} />
-                  <span style={{ color: "#d4d4d4", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={flow.title}>
-                    {flow.title}
-                  </span>
-                  <span style={{ color: "#64748b", flexShrink: 0 }}>{flow.steps.length} steps</span>
-                  {run && (
-                    <span style={{ color: run.result.summary.failed === 0 ? "#22c55e" : "#f87171", fontWeight: 600, flexShrink: 0 }}>
-                      {run.result.summary.failed === 0 ? "PASS" : `FAIL (${run.result.summary.failed})`}
-                    </span>
-                  )}
-                </div>
-              )
-            })}
-            {list.length > shown.length && (
-              <div style={{ fontSize: 9, color: "#64748b", paddingLeft: 4 }}>+{list.length - shown.length} more…</div>
-            )}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", fontSize: 10 }}>
+        <Stat label={t("amFeatures")} value={result.stats.featureCount} color="#a78bfa" />
+        <Stat label={t("amScreens")} value={result.stats.screenCount} color="#22c55e" />
+        <Stat label={t("amFlows")} value={result.flows.length} color="#38bdf8" />
+        <Stat label={t("amTests")} value={result.design.summary.total} color="#e5e5e5" />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, fontSize: 10 }}>
+        <span style={{ color: "#dc2626", fontWeight: 600 }}>{levelLabel(t, "High")} {result.riskSummary.byLevel.High || 0}</span>
+        <span style={{ color: "#d97706", fontWeight: 600 }}>{levelLabel(t, "Medium")} {result.riskSummary.byLevel.Medium || 0}</span>
+        <span style={{ color: "#64748b", fontWeight: 600 }}>{levelLabel(t, "Low")} {result.riskSummary.byLevel.Low || 0}</span>
+        <span style={{ marginLeft: "auto", color: "#94a3b8" }}>
+          {t("amCoverage", { feat: result.coverage.featureCoverage, screens: result.coverage.screenCoverage })}
+        </span>
+      </div>
+
+      {result.authRequirement?.likelyRequiresAuth && (
+        <div style={{ fontSize: 9, color: "#f59e0b" }}>{t("amAuthRequired")}</div>
+      )}
+
+      <Section title={t("amSecFeatures")}>
+        {result.features.map((f) => (
+          <Row key={f.id} left={featLabel(t, f.type, f.name)} right={`${Math.round(f.confidence * 100)}%`} rightColor="#a78bfa" />
+        ))}
+      </Section>
+
+      <Section title={t("amSecFlows")}>
+        {result.flows.map((flow) => (
+          <div key={flow.id} style={{ fontSize: 9, color: "#cbd5e1", paddingLeft: 4 }}>
+            <b style={{ color: "#e5e5e5" }}>{featLabel(t, flow.featureType, flow.feature)}:</b> {flow.steps.map((s) => s.value).join(" → ")}
           </div>
-        )
-      })}
+        ))}
+      </Section>
+
+      <Section title={t("amSecRisks", { n: result.riskSummary.total })}>
+        {result.risks.slice(0, 6).map((r: ExploreRisk, i) => (
+          <div key={i} style={{ display: "flex", gap: 6, fontSize: 9, paddingLeft: 4, alignItems: "baseline" }}>
+            <span style={{ color: riskLevelColor(r.level), fontWeight: 700, minWidth: 56 }}>{levelLabel(t, r.level)}</span>
+            <span style={{ color: "#94a3b8", minWidth: 70 }}>{r.category}</span>
+            <span style={{ color: "#cbd5e1", flex: 1 }}>{r.rationale}</span>
+          </div>
+        ))}
+      </Section>
+
+      <button style={{ ...btn, justifyContent: "center" }} onClick={onDownloadReport}>
+        <FileText size={13} /> {t("amDownloadQaReport")}
+      </button>
+    </div>
+  )
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase" }}>{title}</div>
+      {children}
+    </div>
+  )
+}
+
+function Row({ left, right, rightColor }: { left: string; right: string; rightColor: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, paddingLeft: 4 }}>
+      <span style={{ color: "#d4d4d4", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{left}</span>
+      <span style={{ color: rightColor, fontWeight: 600 }}>{right}</span>
     </div>
   )
 }
 
 function ScanProgress({ job }: { job: ScanJob }) {
+  const { t } = useLanguage()
   const active = job.status === "running" || job.status === "stopping"
-  const phase =
-    job.current?.phase ||
-    (job.status === "done" ? "Done" : job.status === "stopped" ? "Stopped" : "")
+  const phase = phaseLabel(t, job.current?.phase)
   const detail = job.current?.name || job.current?.action || ""
   const lines = job.events
-    .map(eventLine)
+    .map((e) => eventLine(t, e))
     .filter((l): l is string => !!l)
     .slice(-6)
 
@@ -405,7 +585,7 @@ function ScanProgress({ job }: { job: ScanJob }) {
             boxShadow: active ? `0 0 6px ${statusColor(job.status)}` : "none"
           }}
         />
-        <span style={{ fontSize: 11, fontWeight: 600, color: "#e5e5e5", textTransform: "capitalize" }}>{job.status}</span>
+        <span style={{ fontSize: 11, fontWeight: 600, color: "#e5e5e5" }}>{statusLabel(t, job.status)}</span>
         <span style={{ fontSize: 10, color: "#94a3b8", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {phase}
           {detail ? `: ${detail}` : ""}
@@ -413,14 +593,14 @@ function ScanProgress({ job }: { job: ScanJob }) {
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", fontSize: 10 }}>
-        <Stat label="Screens" value={job.counts.screens} color="#22c55e" />
-        <Stat label="Transitions" value={job.counts.transitions} color="#38bdf8" />
-        <Stat label="Skipped (unsafe)" value={job.counts.skipped} color="#f59e0b" />
+        <Stat label={t("amScreens")} value={job.counts.screens} color="#22c55e" />
+        <Stat label={t("amTransitions")} value={job.counts.transitions} color="#38bdf8" />
+        <Stat label={t("amSkippedUnsafe")} value={job.counts.skipped} color="#f59e0b" />
       </div>
 
       {job.skippedDangerous.length > 0 && (
         <div style={{ fontSize: 9, color: "#f59e0b" }}>
-          ⚠ Skipped: {Array.from(new Set(job.skippedDangerous.map((s) => s.label))).slice(0, 8).join(", ")}
+          {t("amSkippedPrefix")}{Array.from(new Set(job.skippedDangerous.map((s) => s.label))).slice(0, 8).join(", ")}
         </div>
       )}
 
@@ -446,7 +626,65 @@ function Stat({ label, value, color }: { label: string; value: number; color: st
   )
 }
 
+function GeneratedFlows({ flows, flowRuns }: { flows: GeneratedFlowsResult; flowRuns: FlowRun[] }) {
+  const { t } = useLanguage()
+  const groups = new Map<string, GeneratedFlow[]>()
+  for (const flow of flows.flows) {
+    const arr = groups.get(flow.type) ?? []
+    arr.push(flow)
+    groups.set(flow.type, arr)
+  }
+  const orderedTypes = [...groups.keys()].sort(
+    (a, b) => FLOW_TYPE_ORDER.indexOf(a) - FLOW_TYPE_ORDER.indexOf(b)
+  )
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#e5e5e5" }}>{t("amGenFlowsTitle", { n: flows.summary.total })}</div>
+      {orderedTypes.map((type) => {
+        const meta = flowTypeMeta(t, type)
+        const list = groups.get(type) ?? []
+        const shown = list.slice(0, 12)
+        return (
+          <div key={type} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 9, fontWeight: 700, color: "#0f0f11", background: meta.color, borderRadius: 4, padding: "1px 6px", textTransform: "uppercase" }}>
+                {meta.label}
+              </span>
+              <span style={{ fontSize: 10, color: "#94a3b8" }}>{list.length}</span>
+              <span style={{ fontSize: 9, color: "#64748b", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {meta.hint}
+              </span>
+            </div>
+            {shown.map((flow) => {
+              const run = flowRuns.find((r) => r.flow.id === flow.id)
+              return (
+                <div key={flow.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, paddingLeft: 4 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: 6, background: flowPriorityColor(flow.priority), flexShrink: 0 }} />
+                  <span style={{ color: "#d4d4d4", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={flow.title}>
+                    {flow.title}
+                  </span>
+                  <span style={{ color: "#64748b", flexShrink: 0 }}>{t("amSteps", { n: flow.steps.length })}</span>
+                  {run && (
+                    <span style={{ color: run.result.summary.failed === 0 ? "#22c55e" : "#f87171", fontWeight: 600, flexShrink: 0 }}>
+                      {run.result.summary.failed === 0 ? t("amPass") : t("amFail", { n: run.result.summary.failed })}
+                    </span>
+                  )}
+                </div>
+              )
+            })}
+            {list.length > shown.length && (
+              <div style={{ fontSize: 9, color: "#64748b", paddingLeft: 4 }}>{t("amMore", { n: list.length - shown.length })}</div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function AppMapScreens({ appMap }: { appMap: AppMap }) {
+  const { t } = useLanguage()
   const nameById = new Map(appMap.screens.map((s) => [s.id, s.name || s.id] as [string, string]))
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -467,13 +705,13 @@ function AppMapScreens({ appMap }: { appMap: AppMap }) {
               {screen.visibleTexts.slice(0, 4).join(" · ") || "—"}
             </div>
             <div style={{ fontSize: 9, color: "#64748b" }}>
-              {screen.clickableElements.length} clickable · {screen.transitions.length} transitions
+              {t("amClickable", { c: screen.clickableElements.length, t: screen.transitions.length })}
             </div>
             {screen.transitions.length > 0 && (
               <div style={{ fontSize: 9, color: "#38bdf8" }}>
                 {screen.transitions
                   .slice(0, 4)
-                  .map((t) => `${t.action?.label || "?"} → ${nameById.get(t.toScreenId ?? "") ?? "?"}`)
+                  .map((tr) => `${tr.action?.label || "?"} → ${nameById.get(tr.toScreenId ?? "") ?? "?"}`)
                   .join("; ")}
               </div>
             )}

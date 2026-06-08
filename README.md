@@ -33,6 +33,51 @@ This should create a production bundle for your extension, ready to be zipped an
 The easiest way to deploy your Plasmo extension is to use the built-in [bpp](https://bpp.browser.market) GitHub action. Prior to using this action however, make sure to build your extension and upload the first version to the store to establish the basic credentials. Then, simply follow [this setup instruction](https://docs.plasmo.com/framework/workflows/submit) and you should be on your way for automated submission!
 # ai-tester
 
+## Autonomous Mobile QA Engineer ("Explore Application")
+
+On top of the scanner sits an autonomous layer that understands the app like a QA
+engineer. Press **Explore Application** (in the App Structure panel) and the agent
+will: build an **Application Knowledge Graph** (features → screens → actions →
+results), discover **business flows**, assess **risks**, design **runnable tests**
+(smoke / happy-path / negative / boundary / risk-based), and write a **senior-QA
+report that explains its reasoning** — without a single manually-written test.
+
+If no app map exists yet, **Explore Application** first runs a **goal-driven scan**
+(actions ranked by inferred user goals; duplicate cards/lists detected via semantic
+memory and sampled rather than exhausted), then analyses the result.
+
+### Intelligence modules (added, ESM, no new dependencies)
+
+| File | Phase | Role |
+|---|---|---|
+| `application-knowledge-graph.mjs` | 1 | Feature→Screen→Action→Result model + business flows + entities |
+| `feature-discovery-engine.mjs` | 2 | Detects features (auth, checkout, payments, …) with confidence + evidence |
+| `goal-driven-explorer.mjs` | 3 | Ranks actions by inferred user goals (crawler `selectActions` hook) |
+| `semantic-action-memory.mjs` | 4 | Action *intent* + duplicate screen/card detection |
+| `auth-explorer.mjs` | 5 | Auth state/capability detection; plans login from configured test creds |
+| `form-intelligence.mjs` | 6 | Field/validation detection; valid/invalid/boundary input generation |
+| `risk-engine.mjs` | 7 | Risk register (severity/likelihood/impact → High/Medium/Low) |
+| `self-healing-engine.mjs` | 8 | Intent-based locators that survive label changes (Login→Sign In) |
+| `autonomous-test-design.mjs` | 9 | Tests from business flows (smoke/happy/negative/boundary/risk) |
+| `visual-intelligence.mjs` | 10 | Layout heuristics (blank/overlap/hidden/loading) + optional vision hook |
+| `autonomous-report.mjs` | 11 | Senior-QA Markdown report with reasoning, coverage & confidence |
+| `explore-orchestrator.mjs` | — | Runs the whole pipeline from a saved app map (offline) |
+
+Goal-driven exploration is opt-in (`options.goalDriven` on a scan) so the plain
+**Scan App Structure** behaviour is unchanged.
+
+### Configured test credentials (for auth flows)
+
+The auth explorer never invents or brute-forces credentials. Supply test creds via
+`QA_TEST_EMAIL` / `QA_TEST_PASSWORD` env vars (or per-call options) to let it plan
+a login. Without them it reports auth structure but does not attempt to sign in.
+
+### Explore endpoint
+
+| Method & path | Body | Returns |
+|---|---|---|
+| `POST /app/explore` | `{ appId }` (loads latest map) or `{ appMap }` | knowledge graph, features, business flows, risks, designed tests, coverage, confidence, and the full Markdown report |
+
 ## AI Mobile QA Agent (app structure scanning)
 
 The local QA agent (`qa-agent/server.mjs`) can automatically explore a mobile
